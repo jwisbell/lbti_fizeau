@@ -1,4 +1,5 @@
 import numpy as np
+from os import mkdir, path
 
 
 def argmax2d(arr):
@@ -20,3 +21,21 @@ def gauss(x, y, alpha, delta, major, minor, pa, f):
     a = (x - alpha) * np.cos(phi) + (y - delta) * np.sin(phi)
     d = (x - alpha) * np.sin(phi) - (y - delta) * np.cos(phi)
     return f * np.exp(-4 * np.log(2) * (np.square(a / minor) + np.square(d / major)))
+
+
+def create_filestructure(output_dir, process, prefix="intermediate"):
+    # see if the intermediate products directory exists inside the output directory
+    if not path.isdir(f"{output_dir}/{prefix}/"):
+        mkdir(f"{output_dir}/{prefix}/")
+
+    # see if the intermediate products directory exists inside the output directory
+    if not path.isdir(f"{output_dir}/plots/"):
+        mkdir(f"{output_dir}/plots/")
+
+    # see if the intermediate products directory exists inside the output directory
+    if not path.isdir(f"{output_dir}/{prefix}/{process}"):
+        mkdir(f"{output_dir}/{prefix}/{process}")
+
+    # see if the intermediate products directory exists inside the output directory
+    if not path.isdir(f"{output_dir}/plots/{process}"):
+        mkdir(f"{output_dir}/plots/{process}")

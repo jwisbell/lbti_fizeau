@@ -13,11 +13,10 @@ pipelinename = "OCATILLO"
 
 
 class Logger:
-    def __init__(self, output_dir, level=0) -> None:
+    def __init__(self, output_dir, targname="", level=0) -> None:
         self.output_dir = output_dir
         self.level = level
-
-    # TODO: will need to create log files for a particular process with a method
+        self.target = targname
 
     def create_log_file(self, process):
         now = datetime.now()
@@ -28,7 +27,7 @@ class Logger:
             f"{pipelinename}\nRunning process: {process} at {date_time}\n" + "=" * 16
         )
         with open(
-            f"{self.output_dir}/{process}.log", "w"
+            f"{self.output_dir}/{process}{self.target}.log", "w"
         ) as logfile:  # open in append mode
             logfile.write(f"{message_string} \n")
 
@@ -53,7 +52,7 @@ class Logger:
             print(f"[{date_time}]  {message_string}")
 
         with open(
-            f"{self.output_dir}/{process}.log", "a"
+            f"{self.output_dir}/{process}{self.target}.log", "a"
         ) as logfile:  # open in append mode
             logfile.write(f"[{date_time}]  {message_string} \n")
 

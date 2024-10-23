@@ -2,15 +2,16 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 import numpy as np
 from matplotlib import animation
-import json
 from matplotlib.colors import PowerNorm
 from scipy.ndimage import median_filter
-from pprint import pprint
-import os
+from util_logger import Logger
+
 
 PROCESS_NAME = "bkg_subtraction"
 extraction_size = 100
 instrument = "NOMIC"
+logger = None
+
 
 # below this should just run
 #####################################################################################
@@ -50,16 +51,16 @@ def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
     # TODO: can this be sped up using multiprocess?
     for name, entry in nods.items():
         if name in skipkeys:
-            # print("skipping!", name)
+            # logger.info(PROCESS_NAME,"skipping!", name)
             continue
         temp = []
         temp_pas = []
-        print(f"Loading nod {name}")
+        logger.info(PROCESS_NAME, f"Loading nod {name}")
         filenames = [
             f"{fdir}{prefix}{str(i).zfill(6)}.fits"
             for i in range(entry["start"], entry["end"] + 1)
         ]
-        print(f"\t {len(filenames)} files")
+        logger.info(PROCESS_NAME, f"\t {len(filenames)} files")
 
         for filename in filenames:
             try:
@@ -72,13 +73,13 @@ def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
                     temp_pas.append(pa)
                     # return
             except FileNotFoundError:
-                print(f"\t\t {filename} failed")
+                logger.warn(PROCESS_NAME, f"\t\t {filename} failed")
                 continue
         images[name] = temp
         pas[name] = temp_pas  # angle_mean(temp_pas)
         fnames[name] = filenames
 
-        print(f"\t Done! Mean PA {np.mean(pas[name])}")
+        logger.info(PROCESS_NAME, f"\t Done! Mean PA {np.mean(pas[name])}")
     return images, pas, fnames
 
 
@@ -88,7 +89,7 @@ def _window_background_subtraction(im_arr, background, window_center):
     for im in im_arr:
         test = _extract_window(im - background, window_center)
         images.append(np.array(test))
-    # print(len(images))
+    # logger.info(PROCESS_NAME,len(images))
     return images
 
 
@@ -110,25 +111,48 @@ def _image_video(img_list1, name):
     return anim
 
 
-def do_bkg_subtraction(configfile):
+def _qa_plots(bg_subtracted_frames, ims, centroid_positions, output_dir, target):
+    # ## (optional) Plot cycles to quickly assess quality
+    # HTML(image_video(bg_subtracted_frames["1"][::2],"2").to_html5_video())
+    for key in bg_subtracted_frames.keys():
+        _ = plt.figure()
+        plt.imshow(
+            np.mean(bg_subtracted_frames[key][:], 0),
+            origin="lower",
+            norm=PowerNorm(0.5),
+            interpolation="gaussian",
+        )
+        plt.scatter(centroid_positions[key][0], centroid_positions[key][1])
+        plt.title(key)
+        plt.savefig(
+            f"{output_dir}/plots/{PROCESS_NAME}/{target}_nod{key}_allframes.png"
+        )
+        plt.close()
+
+    # HTML(image_video(bg_subtracted_frames["2"][::2],"2").to_html5_video())
+
+    _ = plt.figure()
+    plt.title("mean flux")
+    for key in ims.keys():
+        plt.plot([np.nanmean(x) for x in bg_subtracted_frames[key]], label=key)
+    plt.legend()
+    plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_allnods_meanflux.png")
+    plt.close("all")
+
+
+def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
     # # Load the data
     #
     # 1. Extracts a window from each frame
     # 2. Then does background subtraction using specified nod pairs
 
-    if configfile is None:
-        print("No config file specified. Please specify a config file")
-        exit()
-
-    with open(configfile, "r") as inputfile:
-        config = json.load(inputfile)
-
-    print("Config file loaded")
-    pprint(config)
-
+    global logger
     global extraction_size
     global instrument
 
+    logger = mylogger
+
+    # extract relevant info from config file
     target = config["target"]
     nod_info = config["nod_info"]
     instrument = config["instrument"]
@@ -137,32 +161,19 @@ def do_bkg_subtraction(configfile):
     obsdate = config["obsdate"]
     output_dir = config["output_dir"]
     skips = [str(x) for x in config["skips"]]
-    batch_size = 10
+    batch_size = config["batch_size"]
 
     prefix = f"n_{obsdate}_"
     if instrument != "NOMIC":
         prefix = f"lm_{obsdate}_"
 
     process_path = f"intermediate/{PROCESS_NAME}/"
-    # see if the intermediate products directory exists inside the output directory
-    if not os.path.isdir(f"{output_dir}/intermediate/"):
-        os.mkdir(f"{output_dir}/intermediate/")
-
-    # see if the intermediate products directory exists inside the output directory
-    if not os.path.isdir(f"{output_dir}/plots/"):
-        os.mkdir(f"{output_dir}/plots/")
-
-    # see if the intermediate products directory exists inside the output directory
-    if not os.path.isdir(f"{output_dir}/intermediate/{PROCESS_NAME}"):
-        os.mkdir(f"{output_dir}/intermediate/{PROCESS_NAME}")
-
-    # see if the intermediate products directory exists inside the output directory
-    if not os.path.isdir(f"{output_dir}/plots/{PROCESS_NAME}"):
-        os.mkdir(f"{output_dir}/plots/{PROCESS_NAME}")
 
     list_keys = np.array(list(nod_info.keys()))
     num_entries = len(nod_info.keys())
     num_processed = 0
+
+    # handle the file loading in batches to limit RAM usage
     while num_processed < num_entries:
         temp_skips = np.append(
             list_keys[
@@ -173,7 +184,6 @@ def do_bkg_subtraction(configfile):
             ],
             skips,
         )
-        print(temp_skips)
 
         ims, rotations, _ = _load_fits_files(
             data_dir, nod_info, prefix, skipkeys=temp_skips
@@ -186,6 +196,7 @@ def do_bkg_subtraction(configfile):
                 "mean": np.nanmean(entry, 0),
                 "std": np.nanstd(entry, 0),
             }
+
         bg_subtracted_frames = {
             key: _window_background_subtraction(
                 ims[key],
@@ -199,7 +210,6 @@ def do_bkg_subtraction(configfile):
         centroid_positions = {}
 
         for key in bg_subtracted_frames.keys():
-            print(key)
             x = bg_subtracted_frames[key]
 
             im = np.sum(bg_subtracted_frames[key], 0)
@@ -223,39 +233,23 @@ def do_bkg_subtraction(configfile):
                 f"{output_dir}/{process_path}/{target}_bkg-subtracted_cycle{key}.npy", x
             )  # save the background-subtracted frames
 
-        # ## (optional) Plot cycles to quickly assess quality
-        # HTML(image_video(bg_subtracted_frames["1"][::2],"2").to_html5_video())
-        for key in bg_subtracted_frames.keys():
-            _ = plt.figure()
-            plt.imshow(
-                np.mean(bg_subtracted_frames[key][:], 0),
-                origin="lower",
-                norm=PowerNorm(0.5),
-                interpolation="gaussian",
-            )
-            plt.scatter(centroid_positions[key][0], centroid_positions[key][1])
-            plt.title(key)
-            plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/nod{key}_allframes.png")
-            plt.close()
-
-        # HTML(image_video(bg_subtracted_frames["2"][::2],"2").to_html5_video())
-
-        _ = plt.figure()
-        plt.title("mean flux")
-        for key in ims.keys():
-            plt.plot([np.nanmean(x) for x in bg_subtracted_frames[key]], label=key)
-        plt.legend()
-        plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/allnods_meanflux.png")
-        plt.close("all")
+        # do the plotting
+        try:
+            _qa_plots(bg_subtracted_frames, ims, centroid_positions, output_dir, target)
+        except Exception as e:
+            logger.error(PROCESS_NAME, f"_qa_plots failed due to {e}")
+            return False
 
         num_processed += batch_size
-        print(
-            f"Batch done! Processed {min(num_processed,num_entries)} of {num_entries}"
+        logger.info(
+            PROCESS_NAME,
+            f"Batch done! Processed {min(num_processed,num_entries)} of {num_entries}",
         )
-    print("Background subtraction is done!")
+    logger.info(PROCESS_NAME, "Background subtraction is done!")
     return True
 
 
 if __name__ == "__main__":
     configfilename = "./nod_config_ngc4151.json"
-    do_bkg_subtraction(configfilename)
+    mylogger = Logger("../test/")
+    do_bkg_subtraction(configfilename, mylogger)
