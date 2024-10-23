@@ -18,7 +18,9 @@ def _mk_emperical_psf(
     output_dir: str,
 ) -> bool:
     try:
-        psf_im = np.load(psf_calib_fname)
+        psf_percentiles = np.load(psf_calib_fname)
+        psf_im = psf_percentiles  # [0]
+        # psf_err = psf_percentiles[1]
     except FileNotFoundError:
         logger.info(PROCESS_NAME, f"File {psf_calib_fname} not found")
         return False
@@ -37,7 +39,7 @@ def _mk_emperical_psf(
     ]
 
     psf_estimate = np.mean(rotated_psfs, 0)
-    psf_estimate /= np.max(psf_estimate)
+    # psf_estimate /= np.max(psf_estimate)
 
     output_path = f"{output_dir}/calibrated/{PROCESS_NAME}/{psfname}_for_{targetname}_{obsdate}.npy"
     logger.info(PROCESS_NAME, f"PSF estimate created and saved to {output_path}")
@@ -45,6 +47,7 @@ def _mk_emperical_psf(
     np.save(output_path, psf_estimate)
 
     _, ((ax, bx), (cx, dx)) = plt.subplots(2, 2, figsize=(6, 6))
+
     ax.plot(np.max(psf_estimate, 0))
     cx.imshow(psf_estimate, origin="lower", norm=PowerNorm(0.5))
     dx.plot(np.max(psf_estimate, 1), range(psf_estimate.shape[0]))

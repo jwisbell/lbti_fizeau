@@ -40,6 +40,7 @@ if __name__ == "__main__":
     logger = Logger(
         output_dir, f"{target_configdata['target']}_with_{calib_configdata['target']}"
     )
+    # TODO: create file
     logger.info(PROCESS_NAME, "Config file loaded")
     logger.info(PROCESS_NAME, configdata)
 
@@ -49,6 +50,7 @@ if __name__ == "__main__":
     )
     logger.info(PROCESS_NAME, f"Results will be put into directory {output_dir}")
 
+    # TODO: make wrapper functions
     create_filestructure(output_dir, "estimate_final_psf", prefix="calibrated")
     logger.info(PROCESS_NAME, "Starting process `estimate_final_psf`")
     if not do_estimate_final_psf(
@@ -57,6 +59,10 @@ if __name__ == "__main__":
         logger.error(PROCESS_NAME, "Process `estimate_final_psf` failed")
         exit()
     logger.info(PROCESS_NAME, "Process `estimate_final_psf` finished successfully")
+
+    # TODO: flux calibration
+
+    # TODO: rotation video
 
     create_filestructure(output_dir, "deconvolution", prefix="calibrated")
     logger.info(PROCESS_NAME, "Starting process `do_deconvolution`")

@@ -28,7 +28,7 @@ class Logger:
         )
         with open(
             f"{self.output_dir}/{process}{self.target}.log", "w"
-        ) as logfile:  # open in append mode
+        ) as logfile:  # open in write mode
             logfile.write(f"{message_string} \n")
 
     def info(self, process: str, message: str) -> None:

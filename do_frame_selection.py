@@ -434,6 +434,7 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
     if psfname != "model":
         try:
             empirical_psf = np.load(psfname)
+            print(empirical_psf.shape)
         except FileNotFoundError:
             logger.error(PROCESS_NAME, f"PSF {psfname} not found. Exiting...")
             return False

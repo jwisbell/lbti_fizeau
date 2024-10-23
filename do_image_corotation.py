@@ -39,7 +39,7 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
 
 
 def _plot_cycles(
-    imdict: dict, stacked_im, unrotated_mean_psf, target: str, output_dir: str
+    imdict: dict, stacked_im, unrotated_psf_percentiles, target: str, output_dir: str
 ):
     """
     Docstring
@@ -72,12 +72,20 @@ def _plot_cycles(
     plt.close()
 
     _, ((ax, bx), (cx, dx)) = plt.subplots(2, 2, figsize=(6, 6))
-    ax.plot(np.max(unrotated_mean_psf, 0))
-    cx.imshow(unrotated_mean_psf, origin="lower", norm=PowerNorm(0.5))
-    dx.plot(np.max(unrotated_mean_psf, 1), range(unrotated_mean_psf.shape[0]))
+
+    w = stacked_im.shape[0]
+    slcy = unrotated_psf_percentiles[0][:, w // 2]
+    slcy_err = 0  # unrotated_psf_percentiles[1][:, w // 2]
+
+    slcx = unrotated_psf_percentiles[0][w // 2, :]
+    slcx_err = 0  # unrotated_psf_percentiles[1][w // 2, :]
+
+    ax.errorbar(range(stacked_im.shape[0]), slcy, yerr=slcy_err)
+    cx.imshow(unrotated_psf_percentiles[0], origin="lower", norm=PowerNorm(0.5))
+    dx.errorbar(slcx, range(unrotated_psf_percentiles[0].shape[0]), xerr=slcx_err)
     bx.axis("off")
     plt.savefig(
-        f"{output_dir}/plots/{PROCESS_NAME}/{target}_all_cycles_mean_unrotated_psf.png"
+        f"{output_dir}/plots/{PROCESS_NAME}/{target}_all_cycles_median_unrotated_psf.png"
     )
     plt.close()
 
@@ -97,8 +105,9 @@ def _process_rotations(
     proper_rotations = {}
     unrotated_ims = []
     for key, info in infos.items():
+        logger.info(PROCESS_NAME, f"Processing key {key}")
         # cims = np.copy(info["corrected_ims"])
-        cims = np.copy(background_subtracted_frames[key])
+        cims = background_subtracted_frames[key]
 
         rotations = all_rotations[f"{key}"]
         # cc_vals = info["correlation_vals"]
@@ -134,11 +143,15 @@ def _process_rotations(
         temp_rotarr = np.array(temp_rotarr)
         temp_imarr = temp_imarr[mask]
         temp_rotarr = temp_rotarr[mask]
-
+        print(len(temp_imarr))
         proper_rotations[f"{key}"]["ims"] = np.copy(temp_imarr)
         proper_rotations[f"{key}"]["rots"] = np.copy(temp_rotarr)
         del cims
-    return properly_rotated_ims, proper_rotations, np.mean(unrotated_ims, 0)
+    return (
+        properly_rotated_ims,
+        proper_rotations,
+        (np.mean(unrotated_ims, 0), 0),
+    )
 
 
 def do_image_corotation(config: dict, mylogger: Logger) -> bool:
@@ -170,7 +183,6 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     num_files = len(glob(f"{datadir}/{target}*imstack*cycle*.npy"))
 
     info_files = [f"{datadir}/{target}_fs_info_cycle{i+1}.pk" for i in range(num_files)]
-    print(all_rotations.keys())
 
     infos = {}
     for i_f in info_files:
@@ -184,19 +196,27 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     # 2. for each individual image,
     # apply shifts
     # apply rotation
-    properly_rotated_ims, proper_rotations, mean_psf_unrotated = _process_rotations(
-        infos,
-        background_subtracted_frames,
-        centroid_positions,
-        all_rotations,
-        extraction_size,
+    properly_rotated_ims, proper_rotations, psf_unrotated_percentiles = (
+        _process_rotations(
+            infos,
+            background_subtracted_frames,
+            centroid_positions,
+            all_rotations,
+            extraction_size,
+        )
     )
+    # print(len(properly_rotated_ims), len(properly_rotated_ims) / 58)
+    # _ = input("continue?")
 
     # 3. Add all cycles together to get final observation PSF
     # also plot the individual/combined PSFs
     stacked_rotated_im = np.mean(properly_rotated_ims, 0)
     _plot_cycles(
-        proper_rotations, stacked_rotated_im, mean_psf_unrotated, target, output_dir
+        proper_rotations,
+        stacked_rotated_im,
+        psf_unrotated_percentiles,
+        target,
+        output_dir,
     )
 
     # 4. Save to disk
@@ -221,6 +241,6 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
 
     np.save(
         f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_unrotated_stacked_psf.npy",
-        mean_psf_unrotated,
+        psf_unrotated_percentiles,
     )
     return True
