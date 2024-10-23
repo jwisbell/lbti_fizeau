@@ -1,0 +1,20 @@
+{
+  "target_config": "/path/to/target_config.json",
+  "calib_config": "/path/to/calib_config.json",
+
+  "output_dir": "/where/to/save/output/",
+
+  "obs_wavelength": "10.5e-6",
+  "flux_cal": {
+    "calib_flux_Jy": "1.45",
+    "calib_flux_err_Jy": "0.05"
+  },
+
+  "clean_niter": "1e5",
+  "clean_gain": "1e-3",
+  "clean_phat": "0.5",
+  "clean_beam": { "major": "6.8", "minor": "5.8", "rot": "100" },
+
+  "rl_niter": "128",
+  "rl_eps": "1e-3"
+}

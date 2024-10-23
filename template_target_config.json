@@ -1,0 +1,372 @@
+{
+  "target": "Template",
+  "sub_window": 100,
+
+  "instrument": "NOMIC or LMIRCam",
+  "targ_type": "science or calibrator",
+  "obsdate": "240421 -- use lbti filename format YYMMDD",
+  "data_dir": "/path/to/directory/with/raw/data/",
+  "output_dir": "/path/to/directory/you/want/to/save/processed/data/",
+  "skips": ["nod_info", "keys", "to", "skip"],
+  "psfname": "/path/to/empirical/psf/psfname_unrotated_stacked_psf.npy -- or 'model'",
+  "cutoff_fraction": 0.5,
+  "batch_size": 10,
+
+  "nod_info": {
+    "1": { "start": 8000, "end": 9999, "position": [75, 75], "subtract": "2" },
+
+    "2": {
+      "start": 10000,
+      "end": 11999,
+      "position": [85, 200],
+      "subtract": "1"
+    },
+    "3": {
+      "start": 12000,
+      "end": 13999,
+      "position": [75, 75],
+      "subtract": "4"
+    },
+    "4": {
+      "start": 14000,
+      "end": 15999,
+      "position": [85, 200],
+      "subtract": "3"
+    },
+    "5": {
+      "start": 16000,
+      "end": 17999,
+      "position": [75, 75],
+      "subtract": "6"
+    },
+    "6": {
+      "start": 18000,
+      "end": 19999,
+      "position": [85, 200],
+      "subtract": "5"
+    },
+
+    "7": {
+      "start": 20000,
+      "end": 21999,
+      "position": [75, 75],
+      "subtract": "6"
+    },
+    "8": {
+      "start": 22000,
+      "end": 23999,
+      "position": [85, 200],
+      "subtract": "7"
+    },
+    "9": {
+      "start": 24000,
+      "end": 25999,
+      "position": [85, 200],
+      "subtract": "10"
+    },
+    "10": {
+      "start": 26000,
+      "end": 27999,
+      "position": [75, 75],
+      "subtract": "9"
+    },
+    "11": {
+      "start": 28000,
+      "end": 29999,
+      "position": [85, 200],
+      "subtract": "12"
+    },
+
+    "12": {
+      "start": 30000,
+      "end": 31999,
+      "position": [75, 75],
+      "subtract": "11"
+    },
+    "13": {
+      "start": 32000,
+      "end": 33999,
+      "position": [85, 200],
+      "subtract": "14"
+    },
+    "14": {
+      "start": 34000,
+      "end": 35999,
+      "position": [75, 75],
+      "subtract": "13"
+    },
+    "15": {
+      "start": 36000,
+      "end": 37999,
+      "position": [85, 200],
+      "subtract": "16"
+    },
+    "16": {
+      "start": 38000,
+      "end": 39999,
+      "position": [75, 75],
+      "subtract": "15"
+    },
+
+    "17": {
+      "start": 40000,
+      "end": 41999,
+      "position": [85, 200],
+      "subtract": "18"
+    },
+    "18": {
+      "start": 42000,
+      "end": 43999,
+      "position": [75, 75],
+      "subtract": "17"
+    },
+    "19": {
+      "start": 44000,
+      "end": 45999,
+      "position": [85, 200],
+      "subtract": "20"
+    },
+    "20": {
+      "start": 46000,
+      "end": 47999,
+      "position": [75, 75],
+      "subtract": "19"
+    },
+    "21": {
+      "start": 48000,
+      "end": 49999,
+      "position": [85, 200],
+      "subtract": "22"
+    },
+
+    "22": {
+      "start": 50000,
+      "end": 51999,
+      "position": [75, 75],
+      "subtract": "21"
+    },
+    "23": {
+      "start": 52000,
+      "end": 53999,
+      "position": [85, 200],
+      "subtract": "24"
+    },
+    "24": {
+      "start": 54000,
+      "end": 55999,
+      "position": [75, 75],
+      "subtract": "23"
+    },
+    "25": {
+      "start": 56000,
+      "end": 57999,
+      "position": [85, 200],
+      "subtract": "26"
+    },
+    "26": {
+      "start": 58000,
+      "end": 59999,
+      "position": [75, 75],
+      "subtract": "25"
+    },
+
+    "27": {
+      "start": 60000,
+      "end": 61999,
+      "position": [85, 200],
+      "subtract": "28"
+    },
+    "28": {
+      "start": 62000,
+      "end": 63999,
+      "position": [75, 75],
+      "subtract": "27"
+    },
+    "29": {
+      "start": 64000,
+      "end": 65999,
+      "position": [85, 200],
+      "subtract": "30"
+    },
+    "30": {
+      "start": 66000,
+      "end": 67999,
+      "position": [75, 75],
+      "subtract": "29"
+    },
+    "31": {
+      "start": 68000,
+      "end": 69999,
+      "position": [85, 200],
+      "subtract": "32"
+    },
+
+    "32": {
+      "start": 70000,
+      "end": 71999,
+      "position": [75, 75],
+      "subtract": "31"
+    },
+    "33": {
+      "start": 72000,
+      "end": 73999,
+      "position": [85, 200],
+      "subtract": "34"
+    },
+    "34": {
+      "start": 74000,
+      "end": 75999,
+      "position": [75, 75],
+      "subtract": "33"
+    },
+    "35": {
+      "start": 76000,
+      "end": 77999,
+      "position": [85, 200],
+      "subtract": "36"
+    },
+    "36": {
+      "start": 78000,
+      "end": 79999,
+      "position": [75, 75],
+      "subtract": "35"
+    },
+
+    "37": {
+      "start": 80000,
+      "end": 81999,
+      "position": [85, 200],
+      "subtract": "38"
+    },
+    "38": {
+      "start": 82000,
+      "end": 83999,
+      "position": [75, 75],
+      "subtract": "37"
+    },
+    "39": {
+      "start": 84000,
+      "end": 85999,
+      "position": [85, 200],
+      "subtract": "38"
+    },
+    "40": {
+      "start": 86000,
+      "end": 87999,
+      "position": [75, 75],
+      "subtract": "39"
+    },
+    "41": {
+      "start": 88000,
+      "end": 89999,
+      "position": [75, 75],
+      "subtract": "42"
+    },
+
+    "42": {
+      "start": 90000,
+      "end": 91999,
+      "position": [85, 200],
+      "subtract": "43"
+    },
+    "43": {
+      "start": 92000,
+      "end": 93999,
+      "position": [75, 75],
+      "subtract": "42"
+    },
+    "44": {
+      "start": 94000,
+      "end": 95999,
+      "position": [85, 200],
+      "subtract": "45"
+    },
+    "45": {
+      "start": 96000,
+      "end": 97999,
+      "position": [75, 75],
+      "subtract": "44"
+    },
+    "46": {
+      "start": 98000,
+      "end": 99999,
+      "position": [85, 200],
+      "subtract": "47"
+    },
+
+    "47": {
+      "start": 100000,
+      "end": 101999,
+      "position": [75, 75],
+      "subtract": "48"
+    },
+    "48": {
+      "start": 102000,
+      "end": 103999,
+      "position": [85, 200],
+      "subtract": "47"
+    },
+    "49": {
+      "start": 104000,
+      "end": 105999,
+      "position": [75, 75],
+      "subtract": "50"
+    },
+    "50": {
+      "start": 106000,
+      "end": 107999,
+      "position": [85, 200],
+      "subtract": "49"
+    },
+    "51": {
+      "start": 108000,
+      "end": 109999,
+      "position": [75, 75],
+      "subtract": "52"
+    },
+
+    "52": {
+      "start": 110000,
+      "end": 111999,
+      "position": [85, 200],
+      "subtract": "53"
+    },
+    "53": {
+      "start": 112000,
+      "end": 113999,
+      "position": [75, 75],
+      "subtract": "52"
+    },
+    "54": {
+      "start": 114000,
+      "end": 115999,
+      "position": [85, 200],
+      "subtract": "55"
+    },
+    "55": {
+      "start": 116000,
+      "end": 117999,
+      "position": [75, 75],
+      "subtract": "54"
+    },
+    "56": {
+      "start": 118000,
+      "end": 119999,
+      "position": [85, 200],
+      "subtract": "57"
+    },
+
+    "57": {
+      "start": 120000,
+      "end": 121999,
+      "position": [75, 75],
+      "subtract": "58"
+    },
+    "58": {
+      "start": 122000,
+      "end": 123999,
+      "position": [85, 200],
+      "subtract": "57"
+    }
+  }
+}

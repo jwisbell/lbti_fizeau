@@ -462,7 +462,6 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target):
     plt.savefig(
         f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_rl_deconvolution.png"
     )
-    plt.show()
     plt.close()
 
     # save the results

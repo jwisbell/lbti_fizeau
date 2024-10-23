@@ -25,10 +25,15 @@ def _mk_emperical_psf(
     psf_calib_fname: str,
     output_dir: str,
 ) -> bool:
+    """
+    Loads the target and its rotations and applies those rotations to the psf calibrator. Plots the resulting psf and slices.
+    Returns true if successful and false if failed
+    """
+
     try:
         psf_percentiles = np.load(psf_calib_fname)
-        psf_im = psf_percentiles  # [0]
-        # psf_err = psf_percentiles[1]
+        psf_im = psf_percentiles[0]
+        psf_err = psf_percentiles[1]
     except FileNotFoundError:
         logger.info(PROCESS_NAME, f"File {psf_calib_fname} not found")
         return False
@@ -56,9 +61,15 @@ def _mk_emperical_psf(
 
     _, ((ax, bx), (cx, dx)) = plt.subplots(2, 2, figsize=(6, 6))
 
-    ax.plot(np.max(psf_estimate, 0))
-    cx.imshow(psf_estimate, origin="lower", norm=PowerNorm(0.5))
-    dx.plot(np.max(psf_estimate, 1), range(psf_estimate.shape[0]))
+    w = psf_im.shape[0]
+    slcy = psf_im[:, w // 2]
+    slcy_err = psf_err[:, w // 2]
+    slcx = psf_im[w // 2, :]
+    slcx_err = psf_err[w // 2, :]
+
+    ax.errorbar(range(w), slcy, yerr=slcy_err)
+    cx.imshow(psf_im, origin="lower", norm=PowerNorm(0.5))
+    dx.errorbar(slcx, range(w), xerr=slcx_err)
     bx.axis("off")
     plt.savefig(
         f"{output_dir}/plots/{PROCESS_NAME}/psf_estimate_{psfname}_for_{targetname}_{obsdate}.png"
@@ -71,6 +82,11 @@ def _mk_emperical_psf(
 def do_estimate_final_psf(
     wrapperconfig: dict, targetconfig: dict, calibconfig: dict, mylogger: Logger
 ):
+    """
+    Entry point to do_estimate_final_psf -- extracts relevant data from the config files and calls _mk_emperical_psf. Finally saves the results.
+
+    Returns true if successful and false if there's an error
+    """
     global logger
     logger = mylogger
 
