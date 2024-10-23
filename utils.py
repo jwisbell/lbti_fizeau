@@ -1,3 +1,10 @@
+"""
+utils -- LIZARD pipeline
+
+Contains various utility functions that are re-used by multiple scripts.
+
+"""
+
 import numpy as np
 from os import mkdir, path
 
@@ -17,6 +24,7 @@ def angle_mean(arr):
 
 
 def gauss(x, y, alpha, delta, major, minor, pa, f):
+    # returns a 2d gaussian distribution
     phi = np.radians(pa)
     a = (x - alpha) * np.cos(phi) + (y - delta) * np.sin(phi)
     d = (x - alpha) * np.sin(phi) - (y - delta) * np.cos(phi)

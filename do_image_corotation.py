@@ -1,3 +1,11 @@
+"""
+do_image_corotation -- LIZARD Pipeline
+Author: Jacob Isbell
+
+Functions to align all images of an observation such that north is up and that the target is at the center of the frame.
+Called by lizard_reduce
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm

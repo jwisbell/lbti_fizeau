@@ -1,3 +1,13 @@
+"""
+do_deconvolution -- LIZARD Pipeline
+Author: Jacob Isbell
+
+Deconvolution functions for Fizeau images. Requires a science target and a calibrator to previously have been reduced.
+
+Produces the final images and plots to diagnose quality.
+Called by lizard_calibrate
+"""
+
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -14,7 +24,7 @@ from util_logger import Logger
 from utils import gauss
 
 PROCESS_NAME = "deconvolution"
-
+is_flux_cal = False
 
 # TODO: handle this
 PIXEL_SCALE = 0.018  # arcsec/pixel, NOMIC
@@ -134,31 +144,41 @@ def do_clean(
     return resulting_im, new_im, iterations, reason
 
 
-def _plot_beamsize(psf_estimate):
-    # estimate dirty beam
-    fig = plt.figure()
+def _plot_beamsize(psf_estimate, minor, major, angle, output_dir, targname):
+    """
+    Plots the FWHM of the psf calibration in comparison to the supplied ellipse parameters
+    """
+    _ = plt.figure()
     xv, yv = np.meshgrid(
         np.arange(psf_estimate.shape[0]), np.arange(psf_estimate.shape[0])
     )
-    # plt.imshow(psf_estimate,origin='lower')
-    angle = 20  # 20#20#35
-    w = psf_estimate.shape[0] // 2
-    plt.contour(
-        xv, yv, derotate(psf_estimate, angle), levels=[0.5 * np.max(psf_estimate)]
-    )
-    l = 3.4  # 3.4#3.7#6
-    plt.plot([w - l - 1, w + l - 1], [w - 1, w - 1])
-    h = 2.4  # 3.1#2.4#2.4#3.1
-    plt.plot([w - 1, w - 1], [w - h - 1, w + h - 1])
-    plt.title(f"FWHM: approx {l}x{h} px")
-    plt.show()
-    plt.close()
 
-    print(3.6e-6 / 23 * 206265 / 0.0107)
-    print(8.7e-6 / 23 * 206265 / 0.018)
+    w = psf_estimate.shape[0] // 2
+    plt.contour(xv, yv, psf_estimate, levels=[0.50 * np.max(psf_estimate)])
+    ell = Ellipse(
+        xy=(w, w),
+        width=minor,
+        height=major,
+        angle=angle,
+        edgecolor="r",
+        fc="None",
+        lw=5,
+        ls="-",
+    )
+    ax = plt.gca()
+    ax.add_patch(ell)
+    plt.title(
+        f"Restoring Beam: approx {minor} x {major} px ({minor*PIXEL_SCALE*1000:0.1f} x {major*PIXEL_SCALE*1000:0.1f} mas)"
+    )
+    plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/psf_fwhm_{targname}.png")
+    plt.close()
 
 
 def wrap_clean(dirty_im, psf_estimate, configdata, target):
+    """
+    Wraps the do_clean function, extracting the relevant parameters from the config files and plotting the results
+    """
+
     try:
         n_iter = float(configdata["clean_niter"])  # 1e5
         gain = float(configdata["clean_gain"])  # 1e-3
@@ -171,6 +191,8 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
             PROCESS_NAME, f"One or more config parameters for CLEAN is invalid: {e}"
         )
         return None, None, None
+
+    _plot_beamsize(psf_estimate, minor, major, angle, configdata["output_dir"], target)
 
     resulting_im, residual_im, iterations, _ = do_clean(
         dirty_im,
@@ -216,19 +238,8 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
     )  # + residual_im
 
     convim2 = do_convolution(resulting_im * scaling_factor, mygauss)  # + residual_im
-    # print(np.min(resulting_im),np.max(resulting_im), 'here')
-    # convim = gaussian_filter(resulting_im ,(h/2*np.sqrt(2*np.log(2)), l/2*np.sqrt(2*np.log(2))))
-    # print(np.sum(resulting_im),np.sum(convim),np.sum(dirty_im))
 
-    # convim /= conversion
-    # convim *= 1000
     lower_resolution *= scaling_factor
-
-    # convim /= np.sum(convim)
-    # test = np.copy(dirty_im)
-    # test[test<0] = 0
-    # print(np.sum(test ))
-    # convim *= np.sum(dirty_im)
 
     _, axarr = plt.subplots(2, 3, figsize=(12, 6))
     ax, bx, dx, cx, ex, fx = axarr.flatten()
@@ -273,7 +284,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
         norm=PowerNorm(vmin=0, gamma=gamma, vmax=1),
     )
 
-    spacing = np.array([1 / 256, 1 / 128, 1 / 32, 1 / 8, 1 / 2])
+    spacing = np.array([0.9 / 512, 0.9 / 256, 0.9 / 128, 0.9 / 32, 0.9 / 8, 0.9 / 2])
     ax.contour(xv, yv, convim, levels=spacing * np.max(convim), colors="white")
 
     ell = Ellipse(
@@ -293,13 +304,16 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
     cx.set_title("Residual map in last iteration")
     ax.set_title("CLEANed Image")
     fx.set_title("PSF Estimate (corotated)")
-    # plt.colorbar(im, ax=cx, shrink=0.75,label='Flux density [cts/px]')
-    plt.colorbar(im, ax=cx, shrink=0.75, label="Flux density [mJy/px]")
 
-    plt.colorbar(cbar1, ax=ax, shrink=0.75, label="Flux density [mJy/px]")
-    # plt.colorbar(cbar1, ax=ax, shrink=0.75, label='Flux density [cts/px]', extend='neither')
-    plt.colorbar(cbar2, ax=bx, shrink=0.75, label="Flux density [mJy/px]")
-    plt.colorbar(cbar3, ax=dx, shrink=0.75, label="Flux density [mJy/px]")
+    flux_label = "Flux density [cts/px]"
+    if is_flux_cal:
+        flux_label = "Flux density [mJy/px]"
+
+    plt.colorbar(im, ax=cx, shrink=0.75, label=flux_label)
+
+    plt.colorbar(cbar1, ax=ax, shrink=0.75, label=flux_label)
+    plt.colorbar(cbar2, ax=bx, shrink=0.75, label=flux_label)
+    plt.colorbar(cbar3, ax=dx, shrink=0.75, label=flux_label)
     plt.colorbar(cbar4, ax=fx, shrink=0.75, label="Flux density [relative/px]")
 
     # ell = Ellipse((10, 10), minor, major, edgecolor="w", fc="None", lw=1, angle=angle)
@@ -355,12 +369,17 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
 
 
 def wrap_rl(dirty_im, psf_estimate, configdata, target):
+    """
+    Wraps the richardson_lucy deconvolution, extracting relevant config parameters and plotting the results
+    """
+
     try:
         niter = int(configdata["rl_niter"])
         eps = float(configdata["rl_eps"])
     except KeyError as e:
         logger.error(
-            PROCESS_NAME, f"One or more config parameters for CLEAN is invalid: {e}"
+            PROCESS_NAME,
+            f"One or more config parameters for R-L deconvolution is invalid: {e}",
         )
         return None
 
@@ -426,10 +445,13 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target):
     ax.set_ylabel(r"$\Delta\delta$ [arcseconds]", fontsize="small")
     cx.axis("off")
 
+    flux_label = "Flux density [cts/px]"
+    if is_flux_cal:
+        flux_label = "Flux density [mJy/px]"
     plt.colorbar(
         cbar_im,
         ax=cx,
-        label="Flux density [units]",
+        label=flux_label,
         fraction=1.2,
         shrink=1,
         location="right",
@@ -452,29 +474,10 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target):
 def do_deconvolution(
     configdata: dict, target_configdata: dict, calib_configdata: dict, mylogger: Logger
 ) -> bool:
-    """# first load the stacked image
-    targname = "NGC4151"
-    datadir = "../2024A/processeddata/240421/keep90/"
-    # datadir = '../2024A/processeddata/240422/'
-    dirty_im = np.load(f"{datadir}/NGC4151_stacked_corot_v1.npy")
-    # dirty_im -= np.mean(dirty_im[:20,:20])
-    dirty_im -= np.min(dirty_im)
-    # dirty_im /= np.max(dirty_im)
-
-    # then load the psf
-    psf_estimate = np.load(f"{datadir}/HD105410_stacked_corot_psf_v1.npy")
-    psf_estimate -= np.mean(psf_estimate[:20, :20])
-    psf_estimate /= np.max(psf_estimate)
-    psf_estimate = imshift(psf_estimate, *find_max_loc(psf_estimate))  # recenter
-
-    # conversion = 67.07152112765654  #counts/Jy for 8.7
-    # conversion = 115.04281208351598  #counts/Jy for 10.5
-
-    total_flux = [0.96843111, 1.62611157, 2.25614389]  # Jy
-    # total_flux = [1.64965306, 2.1472722,  2.64826731] #Jy
-
-    dirty_im /= np.sum(dirty_im)
-    dirty_im *= total_flux[1] * 1000  # mJy
+    """
+    Wraps the two deconvolution methods, extracting relevant config parameters and saving the results.
+    Calls wrap_clean and wrap_rl
+    returns true if successful, false if there are errors
     """
 
     global logger
@@ -503,7 +506,20 @@ def do_deconvolution(
         logger.error(PROCESS_NAME, f"One or more config entries is incorrect: {e}")
         return False
 
-    # TODO: handle flux calibration
+    # 1. Attempt flux calibration, if files are not available, set a global flag for plot labels
+    global is_flux_cal
+    try:
+        flux_fname = f"{output_dir}/calibrated/flux_calibration/sci_{targname}_with_cal_{calibname}_flux_percentiles.npy"
+        flux_percentiles = np.load(flux_fname)
+        is_flux_cal = True
+        dirty_im /= np.sum(dirty_im)
+        dirty_im *= flux_percentiles[1] * 1000
+        logger.info(PROCESS_NAME, "Flux calibration successfully loaded!")
+
+    except FileNotFoundError:
+        # flux files not present
+        is_flux_cal = False
+        logger.warn(PROCESS_NAME, "Proceeding without proper flux calibration")
 
     clean_restored, clean_residual, clean_pt_src = wrap_clean(
         dirty_im, psf_estimate, configdata, targname

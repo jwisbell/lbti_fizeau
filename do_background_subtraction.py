@@ -1,3 +1,13 @@
+"""
+do_bkg_subtraction -- LIZARD Pipeline
+Author: Jacob Isbell
+
+Functions to load the raw data files and then do background subtraction using the user-specified nod pairs.
+This is the initial data reduction step, and is the most likely to fail if the config file is incorrectly prepared.
+
+Called by lizard_reduce
+"""
+
 import matplotlib.pyplot as plt
 from astropy.io import fits
 import numpy as np

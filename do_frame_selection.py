@@ -1,4 +1,12 @@
-# %%
+"""
+do_frame_selection -- LIZARD Pipeline
+Author: Jacob Isbell
+
+Functions to do lucky fringe frame selection using the cross-correlation between the observation frames and either
+a model PSF or an emperical, calibrated PSF.
+Called by lizard_reduce
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.signal import correlate2d
@@ -433,7 +441,7 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
     # load the psf
     if psfname != "model":
         try:
-            empirical_psf = np.load(psfname)
+            empirical_psf = np.load(psfname)[0]
             print(empirical_psf.shape)
         except FileNotFoundError:
             logger.error(PROCESS_NAME, f"PSF {psfname} not found. Exiting...")
@@ -477,55 +485,6 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
         )
         logger.info(PROCESS_NAME, "#" * 128)
 
-    # Save a median PSF (optional)
-    # optionally generate and save the median psf and std psf
-    if targ_type == "PSF":
-        psfname = target  #'HD105410'
-        datadir = f"../../2024A/processeddata/{obsdate}/"
-
-        num_files_psf = len(glob(f"{datadir}/{psfname}*imstack*cycle*.npy"))
-        im_files = [
-            f"{datadir}/{psfname}_fs_imstack_cycle{i+1}.npy"
-            for i in range(num_files_psf)
-        ]
-
-        psf_ims = [np.load(x) for x in im_files]
-
-        # normalize the psf ims
-        shifted_psfs = []
-        for im in psf_ims:
-            im -= np.min(im)
-            im /= np.max(im)
-            temp_im = np.copy(im)  # gaussian_filter(im, 5)
-
-            w = temp_im.shape[0] // 2
-            (x, y) = [np.argmax(np.sum(im, 0)), np.argmax(np.sum(im, 1))]
-            r_im = np.roll(temp_im, w - x, axis=1)
-            r_im = np.roll(r_im, w - y, axis=0)
-            shifted_psfs.append(r_im)
-
-        # stack the psf to get a good mean estimate
-        median_psf = np.median(shifted_psfs, 0)
-        std_psf = np.std(shifted_psfs, 0)
-
-        # plot this
-        _, ((ax, bx), (cx, dx)) = plt.subplots(2, 2, figsize=(6, 6))
-
-        slcx = median_psf[50, :]
-        slcy = median_psf[:, 50]
-        slc_stdx = std_psf[50, :]
-        slc_stdy = std_psf[:, 50]
-
-        ax.errorbar(range(100), slcx, yerr=slc_stdx)  # np.max(median_psf,0))
-        # ax.plot(range(100), slc_stdx)
-        cx.imshow(median_psf, origin="lower", norm=PowerNorm(0.5))
-        dx.errorbar(slcy, range(len(median_psf)), xerr=slc_stdy)
-        bx.imshow(std_psf, origin="lower", norm=PowerNorm(0.5, vmax=np.max(median_psf)))
-        plt.show()
-        plt.close()
-
-        np.save(f"{datadir}/{psfname}_median_psf_v0.npy", median_psf)
-        np.save(f"{datadir}/{psfname}_std_psf_v0.npy", std_psf)
     return True
 
 
