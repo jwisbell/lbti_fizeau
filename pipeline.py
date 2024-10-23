@@ -63,6 +63,6 @@ if __name__ == "__main__":
     )
     logger.info(PROCESS_NAME, f"Results will be put into directory {output_dir}")
 
-    wrap_bkg_subtraction(output_dir, configdata, logger)
-    wrap_frame_selection(output_dir, configdata, logger)
+    # wrap_bkg_subtraction(output_dir, configdata, logger)
+    # wrap_frame_selection(output_dir, configdata, logger)
     wrap_image_corotation(output_dir, configdata, logger)

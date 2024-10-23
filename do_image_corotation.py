@@ -118,40 +118,40 @@ def _process_rotations(
 
         temp_imarr = []
         temp_rotarr = []
+        temp_unrotarr = []
         for i, cim in enumerate(cims):
-            # shift to center
-            new_im = np.roll(cim, w - centroid_positions[f"{key}"][0], axis=1)
-            new_im = np.roll(new_im, w - centroid_positions[f"{key}"][1], axis=0)
-
-            new_im = np.roll(new_im, -shiftsx[i], axis=1)
-            new_im = np.roll(new_im, -shiftsy[i], axis=0)
-
-            # probably best not to normalize ...
-            # new_im -= np.min(new_im)
-            # new_im /= np.max(new_im)
-
-            # rotate to North
-            pa = rotations[i]
-            rotim = rotate(new_im, -pa, reshape=False, mode="nearest")
-            temp_imarr.append(rotim)
-            temp_rotarr.append(pa)
             if mask[i]:
-                unrotated_ims.append(new_im)
-                properly_rotated_ims.append(rotim)
+                # shift to center
+                new_im = np.roll(cim, w - centroid_positions[f"{key}"][0], axis=1)
+                new_im = np.roll(new_im, w - centroid_positions[f"{key}"][1], axis=0)
+
+                new_im = np.roll(new_im, -shiftsx[i], axis=1)
+                new_im = np.roll(new_im, -shiftsy[i], axis=0)
+
+                # probably best not to normalize ...
+                # new_im -= np.min(new_im)
+                # new_im /= np.max(new_im)
+
+                # rotate to North
+                pa = rotations[i]
+                rotim = rotate(new_im, -pa, reshape=False, mode="nearest")
+                temp_imarr.append(rotim)
+                temp_rotarr.append(pa)
+                temp_unrotarr.append(new_im)
+                # unrotated_ims.append(new_im)
+                # properly_rotated_ims.append(rotim)
 
         temp_imarr = np.array(temp_imarr)
         temp_rotarr = np.array(temp_rotarr)
-        temp_imarr = temp_imarr[mask]
-        temp_rotarr = temp_rotarr[mask]
-        print(len(temp_imarr))
+        temp_unrotarr = np.array(temp_unrotarr)
+        # temp_imarr = temp_imarr[mask]
+        # temp_rotarr = temp_rotarr[mask]
+
         proper_rotations[f"{key}"]["ims"] = np.copy(temp_imarr)
         proper_rotations[f"{key}"]["rots"] = np.copy(temp_rotarr)
+        proper_rotations[f"{key}"]["centered_unrot"] = np.copy(temp_unrotarr)
         del cims
-    return (
-        properly_rotated_ims,
-        proper_rotations,
-        (np.mean(unrotated_ims, 0), 0),
-    )
+    return proper_rotations
 
 
 def do_image_corotation(config: dict, mylogger: Logger) -> bool:
@@ -196,23 +196,40 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     # 2. for each individual image,
     # apply shifts
     # apply rotation
-    properly_rotated_ims, proper_rotations, psf_unrotated_percentiles = (
-        _process_rotations(
-            infos,
-            background_subtracted_frames,
-            centroid_positions,
-            all_rotations,
-            extraction_size,
-        )
+    rotation_dict = _process_rotations(
+        infos,
+        background_subtracted_frames,
+        centroid_positions,
+        all_rotations,
+        extraction_size,
     )
     # print(len(properly_rotated_ims), len(properly_rotated_ims) / 58)
     # _ = input("continue?")
 
     # 3. Add all cycles together to get final observation PSF
+    # compute the necessary images from the above rotation dict
+    # 1. the summed, corotated image
+    # 2. the summed, unrotated image
+    sum_rotated = 0
+    sum_unrotated = 0
+    sum_std = 0
+    count = 0
+    for _, entry in rotation_dict.items():
+        sum_rotated += np.sum(entry["ims"], 0)
+        sum_unrotated += np.sum(entry["centered_unrot"], 0)
+        sum_std += np.std(entry["centered_unrot"], 0)
+        count += len(entry["ims"])
+    mean_rotated = sum_rotated / count
+    mean_unrotated = sum_unrotated / count
+    mean_std = sum_std / count
+
+    psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
+    stacked_rotated_im = mean_rotated
+
     # also plot the individual/combined PSFs
-    stacked_rotated_im = np.mean(properly_rotated_ims, 0)
+    # stacked_rotated_im = np.mean(properly_rotated_ims, 0)
     _plot_cycles(
-        proper_rotations,
+        rotation_dict,
         stacked_rotated_im,
         psf_unrotated_percentiles,
         target,
@@ -226,8 +243,17 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     # df.to_pickle(f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_rotated_ims.pkl")
 
     kept_rots = np.array(
-        [proper_rotations[nod]["rots"] for nod in proper_rotations]
+        [rotation_dict[nod]["rots"] for nod in rotation_dict]
     ).flatten()
+
+    unrotated_per_nod = {
+        nod: np.mean(rotation_dict[nod]["centered_unrot"], 0) for nod in rotation_dict
+    }
+    with open(
+        f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_unrotated_cycle_stacks.pkl",
+        "wb",
+    ) as pkl:
+        pickle.dump(unrotated_per_nod, pkl, protocol=pickle.HIGHEST_PROTOCOL)
 
     np.save(
         f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_included_rotations.npy",
