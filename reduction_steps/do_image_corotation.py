@@ -13,7 +13,7 @@ import pickle
 from scipy.ndimage import rotate
 from glob import glob
 import pandas as pd
-from util_logger import Logger
+from utils.util_logger import Logger
 
 
 PROCESS_NAME = "corotate"

@@ -20,8 +20,8 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse
 import pickle
 
-from util_logger import Logger
-from utils import gauss
+from utils.util_logger import Logger
+from utils.utils import gauss
 
 PROCESS_NAME = "deconvolution"
 is_flux_cal = False

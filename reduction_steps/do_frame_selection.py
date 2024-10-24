@@ -14,8 +14,8 @@ from matplotlib.colors import PowerNorm
 import pickle
 from scipy.ndimage import zoom
 from glob import glob
-from utils import argmax2d, gauss
-from util_logger import Logger
+from utils.utils import argmax2d, gauss
+from utils.util_logger import Logger
 
 
 PROCESS_NAME = "frame_selection"

@@ -10,11 +10,11 @@ from sys import argv
 import json
 
 # pipeline imports
-from utils import create_filestructure
-from util_logger import Logger
-from do_background_subtraction import do_bkg_subtraction
-from do_frame_selection import do_frame_selection
-from do_image_corotation import do_image_corotation
+from utils.utils import create_filestructure
+from utils.util_logger import Logger
+from reduction_steps.do_background_subtraction import do_bkg_subtraction
+from reduction_steps.do_frame_selection import do_frame_selection
+from reduction_steps.do_image_corotation import do_image_corotation
 
 
 PROCESS_NAME = "pipeline"
@@ -47,13 +47,7 @@ def wrap_image_corotation(output_dir, configdata, logger):
     logger.info(PROCESS_NAME, "Process `do_image_corotation` finished successfully")
 
 
-if __name__ == "__main__":
-    script, configfile = argv
-
-    if configfile is None:
-        print("No config file specified. Please specify a config file")
-        exit()
-
+def reduce(configfile: str):
     with open(configfile, "r") as inputfile:
         configdata = json.load(inputfile)
 
@@ -73,3 +67,12 @@ if __name__ == "__main__":
     wrap_bkg_subtraction(output_dir, configdata, logger)
     wrap_frame_selection(output_dir, configdata, logger)
     wrap_image_corotation(output_dir, configdata, logger)
+
+
+if __name__ == "__main__":
+    script, configfile = argv
+
+    if configfile is None:
+        print("No config file specified. Please specify a config file")
+        exit()
+    reduce(configfile)
