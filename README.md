@@ -20,6 +20,23 @@ As of 21 October 2024, compatible with latest version of each.
 Note that Fizeau lucky image includes large amounts of data. 10s or 100s of thousands of raw images make up a raw data set. An example observing night from April 2024 contains 45 GB of raw images. LIZARD produces approximately 15 GB of intermediate and final products during data processing.
 
 ## Usage
+### TLDR
+
+You can run the pipeline by first calling 
+
+```
+lizard.py reduce /path/to/target_config.json
+```
+
+and then 
+
+```
+lizard.py calibrate /path/to/calibration_config.json
+``` 
+
+Details on the format of these config files are listed below. 
+
+
 
 ### 0. Set up a config file for each target
 
@@ -62,9 +79,13 @@ See `template_target_config.json` for an example. The fields to edit are
 
 ### 1. Run the `lizard_reduce.py` script on each target and calibrator
 
-I suggest processing all calibrators first so that their empirical PSFs can be used for the target reduction.
+Usage is 
+```
+lizard.py reduce target_config.json
+```
+, where `target_config.json` is replaced with your config file.
 
-Usage is `python lizard_reduce.py target_config.json`, where `target_config.json` is replaced with your config file.
+I suggest processing all calibrators first so that their empirical PSFs can be used for the target reduction.
 
 Included in this step are
 
@@ -73,6 +94,11 @@ Included in this step are
 3. Image stacking and corotation so that North is up
 
 ### 2. Run the `lizard_calibrate.py` script on each target-calibrator pair
+
+Usage is 
+```
+lizard.py calibrate /path/to/calibration_config.json
+```
 
 This process does the following
 
