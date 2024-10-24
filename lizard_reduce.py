@@ -10,11 +10,11 @@ from sys import argv
 import json
 
 # pipeline imports
-from utils import create_filestructure
-from util_logger import Logger
-from do_background_subtraction import do_bkg_subtraction
-from do_frame_selection import do_frame_selection
-from do_image_corotation import do_image_corotation
+from utils.utils import create_filestructure
+from utils.util_logger import Logger
+from reduction_steps.do_background_subtraction import do_bkg_subtraction
+from reduction_steps.do_frame_selection import do_frame_selection
+from reduction_steps.do_image_corotation import do_image_corotation
 
 
 PROCESS_NAME = "pipeline"

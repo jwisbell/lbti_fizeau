@@ -10,7 +10,7 @@ import numpy as np
 import pickle
 from glob import glob
 
-from util_logger import Logger
+from utils.util_logger import Logger
 
 
 PROCESS_NAME = "flux_calibration"

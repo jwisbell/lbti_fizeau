@@ -12,11 +12,11 @@ import json
 
 # pipeline imports
 
-from utils import create_filestructure
-from util_logger import Logger
-from do_estimate_final_psf import do_estimate_final_psf
-from do_deconvolution import do_deconvolution
-from do_flux_calibration import do_flux_calibration
+from utils.utils import create_filestructure
+from utils.util_logger import Logger
+from calibration_steps.do_estimate_final_psf import do_estimate_final_psf
+from calibration_steps.do_deconvolution import do_deconvolution
+from calibration_steps.do_flux_calibration import do_flux_calibration
 
 PROCESS_NAME = "calibration"
 

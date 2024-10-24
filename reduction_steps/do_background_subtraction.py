@@ -14,7 +14,7 @@ import numpy as np
 from matplotlib import animation
 from matplotlib.colors import PowerNorm
 from scipy.ndimage import median_filter
-from util_logger import Logger
+from utils.util_logger import Logger
 
 
 PROCESS_NAME = "bkg_subtraction"
