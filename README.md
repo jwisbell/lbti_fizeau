@@ -34,7 +34,7 @@ See `template_target_config.json` for an example. The fields to edit are
 - `output_dir`: the path in which to save data products, plots and logs
 - `skips`: a list of `nod_info` keys to ignore during processing (default to this being empty)
 - `psfname`: takes either "model" | "/path/to/reduced/unrotated_psf.npy", which is an intermediate product of the psf calibrator. Suggested to use "model" for calibrators and then the empirical psf for science targets
-- `cutoff_fraction`: percentile of lucky fringing frames to keep (default 0.5, but values from 0.1 to 0.9 are valid; see [Isbell et al. 2024a](link)
+- `cutoff_fraction`: percentile of lucky fringing frames to keep (default 0.5, but values from 0.1 to 0.9 are valid; see [Isbell et al. 2024a](https://www.spiedigitallibrary.org/conference-proceedings-of-spie/13095/1309506/The-LBTI-pioneering-the-ELT-era/10.1117/12.3027270.short?tab=ArticleLinkCited)
 - `batch_size`: raw images are processed in batches to reduce memory overhead (default 10 nods)
 - `nod_info`: a dictionary of format
   ```
@@ -99,3 +99,7 @@ For each target-calibrator pair a new config file must be specified. See `templa
 ## Products
 
 The final product of these procedures is a flux calibrated image with the equivalent resolution of a 23 meter telescope. An example is shown in the below figure. The images and their uncertainties/accompanying data are saved as \*.npy binary files or as pickled objects for ease of use.
+
+### Example image (WORK IN PROGRESS, Copyright J. Isbell)
+![Example image (WORK IN PROGRESS, Copyright J. Isbell)](example_images/NGC4151_clean_deconvolution.png)
+The top left panel is the final science image. The top right panel shows the processed observations before deconvolution. The top center panel shows the final science image at the same resolution as the intial images, for comparison. The bottom left panel is the so-called residual map, which shows the difference between the initial and final images after CLEANING. The bottom right panel shows the PSF used for deconvolution. 
