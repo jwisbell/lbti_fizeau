@@ -71,13 +71,7 @@ def wrap_do_flux_calibration(
     logger.info(PROCESS_NAME, "Process `do_flux_calibration` finished successfully")
 
 
-if __name__ == "__main__":
-    script, configfile = argv
-
-    if configfile is None:
-        print("No config file specified. Please specify a config file")
-        exit()
-
+def calibrate(configfile):
     with open(configfile, "r") as inputfile:
         configdata = json.load(inputfile)
 
@@ -121,3 +115,13 @@ if __name__ == "__main__":
     wrap_do_convolution(
         configdata, target_configdata, calib_configdata, output_dir, logger
     )
+
+
+if __name__ == "__main__":
+    script, configfile = argv
+
+    if configfile is None:
+        print("No config file specified. Please specify a config file")
+        exit()
+
+    calibrate(configfile)
