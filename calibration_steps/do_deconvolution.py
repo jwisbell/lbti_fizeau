@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from scipy.ndimage import rotate
 from scipy.ndimage import gaussian_filter
-from scipy.signal import convolve2d
 from skimage import restoration
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse
@@ -28,8 +27,8 @@ is_flux_cal = False
 
 # TODO: handle this
 PIXEL_SCALE = 0.018  # arcsec/pixel, NOMIC
-# PIXEL_SCALE = 0.0107 #lmircam arcsec/pixel
-w = 49
+# PIXEL_SCALE = 0.0107  # lmircam arcsec/pixel
+w = 50
 # NOMIC
 xticks = np.array(
     [
@@ -45,9 +44,17 @@ xticks = np.array(
 xticklabels = ["", "-0.50", "", "0.0", "", "0.50", ""]
 
 # LMIRCAM
-# xticks = np.array([-0.5/PIXEL_SCALE+w,-0.25/PIXEL_SCALE+w,w,0.25/PIXEL_SCALE+w,0.5/PIXEL_SCALE+w])
-# xticklabels = ['-0.50','-0.25','0.0','0.25','0.50']
-
+"""xticks = np.array(
+    [
+        -0.5 / PIXEL_SCALE + w,
+        -0.25 / PIXEL_SCALE + w,
+        w,
+        0.25 / PIXEL_SCALE + w,
+        0.5 / PIXEL_SCALE + w,
+    ]
+)
+xticklabels = ["-0.50", "-0.25", "0.0", "0.25", "0.50"]
+"""
 # both
 yticklabels = xticklabels[::1]
 
@@ -76,9 +83,10 @@ def find_max_loc(im):
 
 def imshift(im, x, y):
     # roll the im along each axis so that peak is at x,y
-    w = im.shape[0] // 2
-    temp_im = np.roll(im, x - w, axis=1)
-    return np.roll(temp_im, y - w, axis=0)
+    wx = im.shape[0] // 2
+    wy = im.shape[1] // 2
+    temp_im = np.roll(im, x - wx, axis=1)
+    return np.roll(temp_im, y - wy, axis=0)
 
 
 def do_convolution(im, psf):
@@ -150,13 +158,15 @@ def _plot_beamsize(psf_estimate, minor, major, angle, output_dir, targname):
     """
     _ = plt.figure()
     xv, yv = np.meshgrid(
-        np.arange(psf_estimate.shape[0]), np.arange(psf_estimate.shape[0])
+        np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
     )
 
-    w = psf_estimate.shape[0] // 2
-    plt.contour(xv, yv, psf_estimate, levels=[0.50 * np.max(psf_estimate)])
+    print(xv.shape, yv.shape, psf_estimate.shape)
+    plt.contour(
+        xv, yv, psf_estimate, levels=np.array([0.25, 0.50, 0.75]) * np.max(psf_estimate)
+    )
     ell = Ellipse(
-        xy=(w, w),
+        xy=(psf_estimate.shape[0] // 2 - 1, psf_estimate.shape[1] // 2 - 1),
         width=minor,
         height=major,
         angle=angle,
@@ -205,7 +215,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
     )
 
     xv, yv = np.meshgrid(
-        np.arange(resulting_im.shape[0]), np.arange(resulting_im.shape[0])
+        np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
     )
     mygauss = gauss(
         xv,
@@ -237,13 +247,13 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
         -angle,
     )  # + residual_im
 
-    convim2 = do_convolution(resulting_im * scaling_factor, mygauss)  # + residual_im
+    # convim2 = do_convolution(resulting_im * scaling_factor, mygauss)  # + residual_im
 
     lower_resolution *= scaling_factor
 
     _, axarr = plt.subplots(2, 3, figsize=(12, 6))
     ax, bx, dx, cx, ex, fx = axarr.flatten()
-    ex.axis("off")
+    # ex.axis("off")
     gamma = 0.5
 
     cbar1 = ax.imshow(
@@ -284,8 +294,17 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
         norm=PowerNorm(vmin=0, gamma=gamma, vmax=1),
     )
 
+    _ = ex.imshow(
+        resulting_im,
+        origin="lower",
+        cmap="Greys",
+        interpolation="none",
+        norm=PowerNorm(vmin=0, gamma=gamma, vmax=None),
+    )
     spacing = np.array([0.9 / 512, 0.9 / 256, 0.9 / 128, 0.9 / 32, 0.9 / 8, 0.9 / 2])
-    ax.contour(xv, yv, convim, levels=spacing * np.max(convim), colors="white")
+    ax.contour(
+        xv, yv, convim, levels=spacing * np.max(convim), colors="white", alpha=0.5
+    )
 
     ell = Ellipse(
         (10, 10),
@@ -391,7 +410,9 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target):
         dirty_im, normalized_psf, num_iter=niter, filter_epsilon=eps, clip=False
     )
 
-    xv, yv = np.meshgrid(range(deconvolved_RL.shape[0]), range(deconvolved_RL.shape[1]))
+    xv, yv = np.meshgrid(
+        np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
+    )
 
     # start the plotting
     fig = plt.figure(figsize=(8.5, 4), layout="constrained")
@@ -409,7 +430,7 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target):
     )
 
     levels = np.array(
-        [0.9 / 256, 0.9 / 32, 0.9 / 16, 0.9 / 8, 0.9 / 4, 0.9 / 2, 0.9]
+        [0.9 / 512, 0.9 / 256, 0.9 / 32, 0.9 / 16, 0.9 / 8, 0.9 / 4, 0.9 / 2, 0.9]
     ) * np.max(deconvolved_RL)
     bx.contour(
         xv,
@@ -500,6 +521,8 @@ def do_deconvolution(
         psf_estimate -= np.mean(psf_estimate[:20, :20])
         psf_estimate /= np.max(psf_estimate)
         psf_estimate = imshift(psf_estimate, *find_max_loc(psf_estimate))  # recenter
+
+        dirty_im = imshift(dirty_im, *find_max_loc(dirty_im))  # recenter
 
     except KeyError as e:
         logger.error(PROCESS_NAME, f"One or more config entries is incorrect: {e}")

@@ -216,12 +216,13 @@ def _frame_centering_and_selection(
     rotations,
     output_dir,
     target,
+    instrument="NOMIC",
     do_save=True,
     cutoff_fraction=0.9,
     binning=[1, 1],
     usepsf=None,
     do_offset=True,
-    custom_window_size=48,
+    custom_window_size=32,
 ):
     """
     the window size can be set
@@ -397,6 +398,10 @@ def _frame_centering_and_selection(
         recovered_psf = recovered_psfs[0]
         correlation_vals, corrected_ims, other_info = results[0]
 
+    phase_info, vis_info = _calc_phase_info(
+        corrected_ims, output_dir, target, nod, mask, instrument
+    )
+
     # save the information
     if do_save:
         np.save(
@@ -415,9 +420,145 @@ def _frame_centering_and_selection(
             info_dict["mean_pa"] = rotations[nod]
             info_dict["correlation_vals"] = np.copy(correlation_vals)
             info_dict["corrected_ims"] = np.copy(corrected_ims)
+            info_dict["fourier"] = {}
+            info_dict["fourier"]["phase"] = phase_info
+            info_dict["fourier"]["visibilities"] = vis_info
             pickle.dump(info_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     return recovered_psf, correlation_vals, corrected_ims, other_info
+
+
+def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
+    # for each corrected im, calculate the phase information and return it
+    # we have the central phase, delta up-down and delta left-right
+    phase_dict = {"central": [], "ud": [], "lr": []}
+    vis_dict = {"central": []}  # keep the visibility value too, why not
+    gridsize = cims[0].shape[0]  # extraction_size
+
+    dummy_im = np.zeros((gridsize, gridsize))
+    dummy_im[gridsize // 2, gridsize // 2] = 1
+    first_order = np.fft.fftshift(np.fft.fft2(dummy_im))
+
+    for cim in cims:
+        fft_raw = np.fft.fft2(cim)
+        ft = np.fft.fftshift(fft_raw)
+        amp = np.abs(ft)
+        amp /= np.abs(fft_raw[0, 0])
+
+        start = 18  # when using nomic
+        distance = 1  # for lmircam, check for nomic
+
+        if instrument != "NOMIC":
+            start = 20
+            distance = 2
+        amp = amp[:, start:]
+
+        ft /= first_order
+
+        phase = np.angle(ft, deg=False)[:, start:]  # in radians
+
+        # now to extract the values properly
+        xc = 3
+        yc = cim.shape[0] // 2 + 1
+        locs = {
+            "center": (xc, yc),
+            "top": (xc, yc + distance),
+            "bottom": (xc, yc - distance),
+            "left": (xc - distance, yc),
+            "right": (xc + distance, yc),
+        }
+
+        phase_dict["central"].append(phase[locs["center"][1], locs["center"][0]])
+        vis_dict["central"].append(amp[locs["center"][1], locs["center"][0]])
+        phase_dict["ud"].append(
+            phase[locs["top"][1], locs["top"][0]]
+            - phase[locs["bottom"][1], locs["bottom"][0]]
+        )
+        phase_dict["lr"].append(
+            phase[locs["left"][1], locs["left"][0]]
+            - phase[locs["right"][1], locs["right"][0]]
+        )
+    _, axarr = plt.subplots(2, 3)
+    axarr[0][1].imshow(
+        phase,
+        origin="lower",
+        cmap="coolwarm",
+        vmin=-np.pi / 2,
+        vmax=np.pi / 2,
+        interpolation="gaussian",
+    )
+    # axarr[0][1].axis("off")
+    axarr[0][2].axis("off")
+    bins = np.linspace(-3.15, 3.15, 25)
+    axarr[1][0].hist(
+        phase_dict["ud"], bins=bins, histtype="stepfilled", color="firebrick"
+    )
+    axarr[1][0].hist(
+        np.array(phase_dict["ud"])[~mask],
+        bins=bins,
+        histtype="stepfilled",
+        color="orange",
+    )
+    axarr[1][0].set_title("Tip")
+    axarr[1][0].set_xlabel(
+        r"$\Delta$" + "Phase (top-bottom)\n[fractions of a wavelength]"
+    )
+    yh, _, _ = axarr[1][1].hist(
+        phase_dict["central"], bins=bins, histtype="stepfilled", color="k"
+    )
+    axarr[1][1].hist(
+        np.array(phase_dict["central"])[~mask],
+        bins=bins,
+        histtype="stepfilled",
+        color="orange",
+    )
+    axarr[1][1].plot([1, 1], [0, np.max(yh)], "k--")
+    axarr[1][1].plot([-1, -1], [0, np.max(yh)], "k--")
+    axarr[1][1].set_xlabel("Fourier Phase\n[fractions of a wavelength]")
+    axarr[1][1].set_title("Piston")
+    axarr[1][2].hist(
+        phase_dict["lr"], bins=bins, histtype="stepfilled", color="dodgerblue"
+    )
+    axarr[1][2].hist(
+        np.array(phase_dict["lr"])[~mask],
+        bins=bins,
+        histtype="stepfilled",
+        color="orange",
+    )
+    axarr[1][2].set_xlabel(
+        r"$\Delta$" + "Phase (left-right)\n[fractions of a wavelength]"
+    )
+    axarr[1][2].set_title("Tilt")
+
+    axarr[0][2].plot(
+        [locs["left"][0], locs["right"][0]],
+        [locs["left"][1], locs["right"][1]],
+        color="dodgerblue",
+        marker="o",
+    )
+    axarr[0][2].plot(
+        [locs["top"][0], locs["bottom"][0]],
+        [locs["top"][1], locs["bottom"][1]],
+        color="firebrick",
+        marker="s",
+    )
+    axarr[0][2].plot(
+        [locs["center"][0], locs["center"][0]],
+        [locs["center"][1], locs["center"][1]],
+        color="black",
+        marker="x",
+    )
+
+    axarr[0][0].hist(
+        vis_dict["central"], bins=20, histtype="stepfilled", color="firebrick"
+    )
+    axarr[0][0].set_title("Visibility")
+    axarr[0][0].set_xlabel("Visibility")
+
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_nod{nod}_phasedist.png")
+
+    return phase_dict, vis_dict
 
 
 def do_frame_selection(config: dict, mylogger: Logger) -> bool:
@@ -453,6 +594,8 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
     for name, _ in nod_info.items():
         if name in skips:
             continue
+        if "bkg" in name:
+            continue
         cent = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
         )
@@ -478,6 +621,7 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
             rotations,
             f"{output_dir}",
             target,
+            instrument=instrument,
             do_save=True,
             cutoff_fraction=CUTOFF_FRACTION,
             usepsf=mypsf,
@@ -489,5 +633,26 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
 
 
 if __name__ == "__main__":
-    configfilename = "./nod_config_ngc4151.json"
-    do_frame_selection(configfilename)
+    import json
+
+    configfilename = (
+        "/Users/jwisbell/Documents/lbti/2018A/AC Her/hd167275_lband_config.json"
+    )
+
+    with open(configfilename, "r") as inputfile:
+        configdata = json.load(inputfile)
+
+    target = configdata["target"]
+    data_dir = configdata["data_dir"]
+    output_dir = configdata["output_dir"]
+
+    logger = Logger(output_dir, target)
+    logger.create_log_file(PROCESS_NAME)
+    logger.info(PROCESS_NAME, "Config file loaded")
+    logger.info(PROCESS_NAME, configdata)
+    logger.info(
+        PROCESS_NAME, f"Starting processing of {target} in directory {data_dir}"
+    )
+    logger.info(PROCESS_NAME, f"Results will be put into directory {output_dir}")
+
+    do_frame_selection(configdata, logger)

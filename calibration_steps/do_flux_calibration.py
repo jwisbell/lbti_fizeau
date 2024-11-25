@@ -36,7 +36,9 @@ def _load_images_and_compute_stats(path_dict: dict, skips: list = []):
             kept_ims = np.array([x - np.mean(x[:20, :20]) for x in kept_ims])
             kept_ims = np.array([x - np.min(x) for x in kept_ims])
 
-            all_kept_sums.append([np.sum(x) for x in kept_ims])
+            # all_kept_sums.append([np.sum(x) for x in kept_ims])
+            for ki in kept_ims:
+                all_kept_sums.append(np.sum(ki))
     all_kept_sums = np.array(all_kept_sums).flatten()
     return {
         "mean": np.mean(all_kept_sums),

@@ -50,6 +50,7 @@ def _mk_emperical_psf(
     rotated_psfs = [
         rotate(psf_im, -pa, reshape=False, mode="nearest") for pa in rotations
     ]
+    logger.info(PROCESS_NAME, f"The mean rotation is {rotations}")
 
     psf_estimate = np.mean(rotated_psfs, 0)
     # psf_estimate /= np.max(psf_estimate)
@@ -67,9 +68,9 @@ def _mk_emperical_psf(
     slcx = psf_im[w // 2, :]
     slcx_err = psf_err[w // 2, :]
 
-    ax.errorbar(range(w), slcy, yerr=slcy_err)
-    cx.imshow(psf_im, origin="lower", norm=PowerNorm(0.5))
-    dx.errorbar(slcx, range(w), xerr=slcx_err)
+    ax.errorbar(range(len(slcx)), slcx, yerr=slcx_err)
+    cx.imshow(psf_estimate, origin="lower", norm=PowerNorm(0.5))
+    dx.errorbar(slcy, range(len(slcy)), xerr=slcy_err)
     bx.axis("off")
     plt.savefig(
         f"{output_dir}/plots/{PROCESS_NAME}/psf_estimate_{psfname}_for_{targetname}_{obsdate}.png"

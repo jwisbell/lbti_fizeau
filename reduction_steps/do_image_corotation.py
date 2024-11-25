@@ -12,9 +12,8 @@ from matplotlib.colors import PowerNorm
 import pickle
 from scipy.ndimage import rotate
 from glob import glob
-import pandas as pd
 from utils.util_logger import Logger
-
+from utils.utils import argmax2d
 
 PROCESS_NAME = "corotate"
 
@@ -30,7 +29,8 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
     for name, _ in nod_info.items():
         if name in skips:  # ['6','7','11']:
             continue
-
+        if "bkg" in name:
+            continue
         bkgsubtracted_ims = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
         )
@@ -53,17 +53,18 @@ def _plot_cycles(
     Docstring
     """
 
-    _, axarr = plt.subplots(len(imdict) // 10 + 1, 10, figsize=(8.5, 11))
+    _, axarr = plt.subplots(len(imdict) // 6 + 1, 6)  # figsize=(8.5, 11))
     for ax in axarr.flatten():
         ax.axis("off")
 
     for k, key in enumerate(imdict.keys()):
         ims = imdict[key]["ims"]
-        rotim = np.mean(ims, 0)
+        rotim, _, _ = recenter(np.mean(ims, 0))
 
         ax = axarr.flatten()[k]
 
         ax.imshow(rotim, origin="lower", norm=PowerNorm(0.5))
+        # ax.scatter(rotim.shape[0] // 2, rotim.shape[1] // 2, marker="x", color="r")
         ax.set_title(f"Cycle {k+1}")
     plt.tight_layout()
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_all_cycles_rotated.png")
@@ -83,14 +84,14 @@ def _plot_cycles(
 
     w = stacked_im.shape[0]
     slcy = unrotated_psf_percentiles[0][:, w // 2]
-    slcy_err = 0  # unrotated_psf_percentiles[1][:, w // 2]
+    slcy_err = unrotated_psf_percentiles[1][:, w // 2]
 
     slcx = unrotated_psf_percentiles[0][w // 2, :]
-    slcx_err = 0  # unrotated_psf_percentiles[1][w // 2, :]
+    slcx_err = unrotated_psf_percentiles[1][w // 2, :]
 
-    ax.errorbar(range(stacked_im.shape[0]), slcy, yerr=slcy_err)
+    ax.errorbar(range(stacked_im.shape[1]), slcx, yerr=slcx_err)
     cx.imshow(unrotated_psf_percentiles[0], origin="lower", norm=PowerNorm(0.5))
-    dx.errorbar(slcx, range(unrotated_psf_percentiles[0].shape[0]), xerr=slcx_err)
+    dx.errorbar(slcy, range(stacked_im.shape[0]), xerr=slcy_err)
     bx.axis("off")
     plt.savefig(
         f"{output_dir}/plots/{PROCESS_NAME}/{target}_all_cycles_median_unrotated_psf.png"
@@ -143,6 +144,7 @@ def _process_rotations(
                 # rotate to North
                 pa = rotations[i]
                 rotim = rotate(new_im, -pa, reshape=False, mode="nearest")
+
                 temp_imarr.append(rotim)
                 temp_rotarr.append(pa)
                 temp_unrotarr.append(new_im)
@@ -160,6 +162,15 @@ def _process_rotations(
         proper_rotations[f"{key}"]["centered_unrot"] = np.copy(temp_unrotarr)
         del cims
     return proper_rotations
+
+
+def recenter(im):
+    x, y = argmax2d(im)
+
+    new_im = np.roll(im, im.shape[1] // 2 - x, axis=1)
+    new_im = np.roll(new_im, im.shape[0] // 2 - y, axis=0)
+
+    return new_im, im.shape[1] // 2 - x, im.shape[0] // 2 - y
 
 
 def do_image_corotation(config: dict, mylogger: Logger) -> bool:
@@ -223,9 +234,14 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     sum_std = 0
     count = 0
     for _, entry in rotation_dict.items():
-        sum_rotated += np.sum(entry["ims"], 0)
-        sum_unrotated += np.sum(entry["centered_unrot"], 0)
-        sum_std += np.std(entry["centered_unrot"], 0)
+        # for some reason these need to be recentered again
+        centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
+        centered_unrot, x, y = recenter(np.sum(entry["centered_unrot"], 0))
+        sum_rotated += centered_rot
+        sum_unrotated += centered_unrot
+        sum_std += np.roll(
+            np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
+        )
         count += len(entry["ims"])
     mean_rotated = sum_rotated / count
     mean_unrotated = sum_unrotated / count
@@ -250,9 +266,16 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     # df = pd.DataFrame.from_dict(proper_rotations)
     # df.to_pickle(f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_rotated_ims.pkl")
 
-    kept_rots = np.array(
-        [rotation_dict[nod]["rots"] for nod in rotation_dict]
-    ).flatten()
+    print([len(rotation_dict[nod]["rots"]) for nod in rotation_dict])
+
+    kept_rots = []
+    for _, entry in rotation_dict.items():
+        for rot in entry["rots"]:
+            kept_rots.append(rot)
+    # kept_rots = np.array(
+    # [rotation_dict[nod]["rots"] for nod in rotation_dict]
+    # ).flatten()
+    kept_rots = np.array(kept_rots)
 
     unrotated_per_nod = {
         nod: np.mean(rotation_dict[nod]["centered_unrot"], 0) for nod in rotation_dict
