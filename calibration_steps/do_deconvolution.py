@@ -25,11 +25,9 @@ from utils.utils import gauss
 PROCESS_NAME = "deconvolution"
 is_flux_cal = False
 
-# TODO: handle this
 PIXEL_SCALE = 0.018  # arcsec/pixel, NOMIC
-# PIXEL_SCALE = 0.0107  # lmircam arcsec/pixel
 w = 50
-# NOMIC
+# NOMIC (default)
 xticks = np.array(
     [
         -0.75 / PIXEL_SCALE + w,
@@ -42,20 +40,6 @@ xticks = np.array(
     ]
 )
 xticklabels = ["", "-0.50", "", "0.0", "", "0.50", ""]
-
-# LMIRCAM
-"""xticks = np.array(
-    [
-        -0.5 / PIXEL_SCALE + w,
-        -0.25 / PIXEL_SCALE + w,
-        w,
-        0.25 / PIXEL_SCALE + w,
-        0.5 / PIXEL_SCALE + w,
-    ]
-)
-xticklabels = ["-0.50", "-0.25", "0.0", "0.25", "0.50"]
-"""
-# both
 yticklabels = xticklabels[::1]
 
 
@@ -101,12 +85,20 @@ def derotate(frame, rot):
 
 
 def do_clean(
-    dirty_im, psf_estimate, n_iter, gain=1e-4, threshold=1e-6, negstop=False, phat=0.0
+    dirty_im,
+    psf_estimate,
+    n_iter,
+    gain=1e-4,
+    threshold=1e-6,
+    negstop=False,
+    phat=0.0,
+    resulting_im=None,
 ):
     k = 0
     im_0 = np.copy(dirty_im)
     im_i = np.copy(im_0)
-    resulting_im = np.zeros(im_0.shape)
+    if resulting_im is None:
+        resulting_im = np.zeros(im_0.shape)
 
     beam = np.copy(psf_estimate)
     beam /= np.max(beam)  # renormalize the psf estimate
@@ -117,11 +109,15 @@ def do_clean(
     delta = np.inf
     reason = f"niter: {n_iter}"
     new_im = np.copy(dirty_im)
+    if threshold is not None:
+        n_iter = 1e7  # something crazy long
+    else:
+        threshold = -1
     while k < n_iter:  # and delta > 1e-8:
         pk_x, pk_y = find_max_loc(im_i)
-        if im_i[pk_x, pk_y] < threshold:
+        if abs(im_i[pk_x, pk_y]) < threshold:
             reason = f"threshold ({k} iter)"
-            # break
+            break
         shifted_beam = np.copy(beam)
         shifted_beam = imshift(
             shifted_beam, pk_y, pk_x
@@ -152,11 +148,19 @@ def do_clean(
     return resulting_im, new_im, iterations, reason
 
 
-def _plot_beamsize(psf_estimate, minor, major, angle, output_dir, targname):
+def _plot_beamsize(
+    psf_estimate,
+    minor,
+    major,
+    angle,
+    output_dir,
+    targname,
+    mode="interactive",
+):
     """
     Plots the FWHM of the psf calibration in comparison to the supplied ellipse parameters
     """
-    _ = plt.figure()
+    fig1 = plt.figure()
     xv, yv = np.meshgrid(
         np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
     )
@@ -181,10 +185,14 @@ def _plot_beamsize(psf_estimate, minor, major, angle, output_dir, targname):
         f"Restoring Beam: approx {minor} x {major} px ({minor*PIXEL_SCALE*1000:0.1f} x {major*PIXEL_SCALE*1000:0.1f} mas)"
     )
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/psf_fwhm_{targname}.png")
-    plt.close()
+
+    if mode == "interactive":
+        fig1.show()
+    else:
+        plt.close()
 
 
-def wrap_clean(dirty_im, psf_estimate, configdata, target):
+def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
     """
     Wraps the do_clean function, extracting the relevant parameters from the config files and plotting the results
     """
@@ -196,193 +204,323 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target):
         major = float(configdata["clean_beam"]["major"])
         angle = float(configdata["clean_beam"]["rot"])
         phat = float(configdata["clean_phat"])
+        threshold = float(configdata["clean_threshold"])
     except KeyError as e:
         logger.error(
             PROCESS_NAME, f"One or more config parameters for CLEAN is invalid: {e}"
         )
         return None, None, None
 
-    _plot_beamsize(psf_estimate, minor, major, angle, configdata["output_dir"], target)
+    if threshold == -1:
+        threshold = None
 
-    resulting_im, residual_im, iterations, _ = do_clean(
-        dirty_im,
-        psf_estimate,
-        n_iter=n_iter,
-        gain=gain,
-        threshold=10,
-        negstop=False,
-        phat=phat,
-    )
+    while True:
+        _plot_beamsize(
+            psf_estimate,
+            minor,
+            major,
+            angle,
+            configdata["output_dir"],
+            target,
+            mode=mode,
+        )
 
-    xv, yv = np.meshgrid(
-        np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
-    )
-    mygauss = gauss(
-        xv,
-        yv,
-        resulting_im.shape[0] // 2,
-        resulting_im.shape[0] // 2,
-        major / (2 * np.sqrt(2 * np.log(2))),
-        minor / (2 * np.sqrt(2 * np.log(2))),
-        angle,
-        1,
-    )
-    mygauss /= np.sum(mygauss)
+        if mode != "interactive":
+            plt.close("all")
+            break
+        else:
+            print(
+                f"Current values -- major:{major:.1f}px\tminor:{minor:.1f}px\tpa{angle:.2f}deg "
+            )
+            command = input(
+                "Modify the psf ('major XX', 'minor XX', 'pa XX') or 'okay':\t"
+            )
+            if command == "okay":
+                plt.close("all")
+                break
+            elif "major" in command:
+                try:
+                    tmp = float(command.split()[-1])
+                    major = tmp
+                except SyntaxError as e:
+                    logger.warn(PROCESS_NAME, f"Could not parse major axis value: {e}")
+            elif "minor" in command:
+                try:
+                    tmp = float(command.split()[-1])
+                    minor = tmp
+                except SyntaxError as e:
+                    logger.warn(PROCESS_NAME, f"Could not parse minor axis value: {e}")
+            elif "pa" in command:
+                try:
+                    tmp = float(command.split()[-1])
+                    angle = tmp
+                except SyntaxError as e:
+                    logger.warn(
+                        PROCESS_NAME, f"Could not parse position angle value: {e}"
+                    )
+            else:
+                print(f"Command '{command}' not recognized...")
 
-    lower_resolution = np.array(
-        do_convolution(resulting_im, psf_estimate / np.sum(psf_estimate))
-    )
-    scaling_factor = np.max(dirty_im) / np.max(lower_resolution)
-    print(scaling_factor, np.sum(dirty_im) / np.sum(resulting_im))
+            plt.close("all")
+    logger.info(PROCESS_NAME, "Beam selection completed. Continuing ... ")
 
-    convim = derotate(
-        gaussian_filter(
-            derotate(resulting_im * scaling_factor, angle),
-            (
-                major / (2 * np.sqrt(2 * np.log(2))),
-                minor / (2 * np.sqrt(2 * np.log(2))),
+    resulting_im = None
+    im_to_clean = dirty_im
+    while True:
+        logger.info(PROCESS_NAME, "Starting  CLEAN...")
+        resulting_im, residual_im, iterations, _ = do_clean(
+            im_to_clean,
+            psf_estimate,
+            n_iter=n_iter,
+            gain=gain,
+            threshold=threshold,
+            negstop=False,
+            phat=phat,
+            resulting_im=resulting_im,
+        )
+
+        xv, yv = np.meshgrid(
+            np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
+        )
+        mygauss = gauss(
+            xv,
+            yv,
+            resulting_im.shape[0] // 2,
+            resulting_im.shape[0] // 2,
+            major / (2 * np.sqrt(2 * np.log(2))),
+            minor / (2 * np.sqrt(2 * np.log(2))),
+            angle,
+            1,
+        )
+        mygauss /= np.sum(mygauss)
+
+        lower_resolution = np.array(
+            do_convolution(resulting_im, psf_estimate / np.sum(psf_estimate))
+        )
+        scaling_factor = np.max(dirty_im) / np.max(lower_resolution)
+        # print(scaling_factor, np.sum(dirty_im) / np.sum(resulting_im))
+
+        convim = derotate(
+            gaussian_filter(
+                derotate(resulting_im * scaling_factor, angle),
+                (
+                    major / (2 * np.sqrt(2 * np.log(2))),
+                    minor / (2 * np.sqrt(2 * np.log(2))),
+                ),
+                mode="mirror",
             ),
-            mode="mirror",
-        ),
-        -angle,
-    )  # + residual_im
+            -angle,
+        )  # + residual_im
 
-    # convim2 = do_convolution(resulting_im * scaling_factor, mygauss)  # + residual_im
+        # convim2 = do_convolution(resulting_im * scaling_factor, mygauss)  # + residual_im
 
-    lower_resolution *= scaling_factor
+        lower_resolution *= scaling_factor
 
-    _, axarr = plt.subplots(2, 3, figsize=(12, 6))
-    ax, bx, dx, cx, ex, fx = axarr.flatten()
-    # ex.axis("off")
-    gamma = 0.5
+        fig1, axarr = plt.subplots(2, 3, figsize=(12, 6))
+        ax, bx, dx, cx, ex, fx = axarr.flatten()
+        # ex.axis("off")
+        gamma = 0.5
 
-    cbar1 = ax.imshow(
-        convim + residual_im * 0,
-        origin="lower",
-        cmap="Spectral_r",
-        interpolation="none",
-        norm=PowerNorm(vmin=0, vmax=0.95 * np.max(convim), gamma=gamma),
-    )
-    # fix
-    cbar2 = bx.imshow(
-        lower_resolution,
-        origin="lower",
-        cmap="magma",
-        interpolation="none",
-        norm=PowerNorm(vmin=0, gamma=gamma, vmax=None),
-    )
-    im = cx.imshow(
-        residual_im,
-        origin="lower",
-        cmap="Spectral_r",
-        interpolation="none",
-        norm=PowerNorm(vmin=None, vmax=None, gamma=gamma),
-    )
+        cbar1 = ax.imshow(
+            convim + residual_im * 0,
+            origin="lower",
+            cmap="Spectral_r",
+            interpolation="none",
+            norm=PowerNorm(vmin=0, vmax=0.95 * np.max(convim), gamma=gamma),
+        )
+        # fix
+        cbar2 = bx.imshow(
+            lower_resolution,
+            origin="lower",
+            cmap="magma",
+            interpolation="none",
+            norm=PowerNorm(vmin=0, gamma=gamma, vmax=None),
+        )
+        im = cx.imshow(
+            residual_im,
+            origin="lower",
+            cmap="Spectral_r",
+            interpolation="none",
+            norm=PowerNorm(vmin=None, vmax=None, gamma=gamma),
+        )
 
-    cbar3 = dx.imshow(
-        dirty_im,
-        origin="lower",
-        cmap="magma",
-        interpolation="none",
-        norm=PowerNorm(vmin=0, gamma=gamma, vmax=None),
-    )
-    cbar4 = fx.imshow(
-        psf_estimate,
-        origin="lower",
-        cmap="magma",
-        interpolation="none",
-        norm=PowerNorm(vmin=0, gamma=gamma, vmax=1),
-    )
+        cbar3 = dx.imshow(
+            dirty_im,
+            origin="lower",
+            cmap="magma",
+            interpolation="none",
+            norm=PowerNorm(vmin=0, gamma=gamma, vmax=None),
+        )
+        cbar4 = fx.imshow(
+            psf_estimate,
+            origin="lower",
+            cmap="magma",
+            interpolation="none",
+            norm=PowerNorm(vmin=0, gamma=gamma, vmax=1),
+        )
 
-    _ = ex.imshow(
-        resulting_im,
-        origin="lower",
-        cmap="Greys",
-        interpolation="none",
-        norm=PowerNorm(vmin=0, gamma=gamma, vmax=None),
-    )
-    spacing = np.array([0.9 / 512, 0.9 / 256, 0.9 / 128, 0.9 / 32, 0.9 / 8, 0.9 / 2])
-    ax.contour(
-        xv, yv, convim, levels=spacing * np.max(convim), colors="white", alpha=0.5
-    )
+        _ = ex.imshow(
+            resulting_im,
+            origin="lower",
+            cmap="Greys",
+            interpolation="none",
+            norm=PowerNorm(vmin=0, gamma=gamma, vmax=None),
+        )
+        spacing = np.array(
+            [0.9 / 512, 0.9 / 256, 0.9 / 128, 0.9 / 32, 0.9 / 8, 0.9 / 2]
+        )
+        ax.contour(
+            xv, yv, convim, levels=spacing * np.max(convim), colors="white", alpha=0.5
+        )
 
-    ell = Ellipse(
-        (10, 10),
-        minor,
-        major,
-        edgecolor="w",
-        fc="None",
-        lw=2,
-        angle=angle,
-        hatch="/////",
-    )
-    ax.add_patch(ell)
+        ell = Ellipse(
+            (10, 10),
+            minor,
+            major,
+            edgecolor="w",
+            fc="None",
+            lw=2,
+            angle=angle,
+            hatch="/////",
+        )
+        ax.add_patch(ell)
 
-    dx.set_title("Original Target Image")
-    bx.set_title("Target Estimate (convolved)")
-    cx.set_title("Residual map in last iteration")
-    ax.set_title("CLEANed Image")
-    fx.set_title("PSF Estimate (corotated)")
+        dx.set_title("Original Target Image")
+        bx.set_title("Target Estimate (convolved)")
+        cx.set_title("Residual map in last iteration")
+        ax.set_title("CLEANed Image")
+        fx.set_title("PSF Estimate (corotated)")
 
-    flux_label = "Flux density [cts/px]"
-    if is_flux_cal:
-        flux_label = "Flux density [mJy/px]"
+        flux_label = "Flux density [cts/px]"
+        if is_flux_cal:
+            flux_label = "Flux density [mJy/px]"
 
-    plt.colorbar(im, ax=cx, shrink=0.75, label=flux_label)
+        plt.colorbar(im, ax=cx, shrink=0.75, label=flux_label)
 
-    plt.colorbar(cbar1, ax=ax, shrink=0.75, label=flux_label)
-    plt.colorbar(cbar2, ax=bx, shrink=0.75, label=flux_label)
-    plt.colorbar(cbar3, ax=dx, shrink=0.75, label=flux_label)
-    plt.colorbar(cbar4, ax=fx, shrink=0.75, label="Flux density [relative/px]")
+        plt.colorbar(cbar1, ax=ax, shrink=0.75, label=flux_label)
+        plt.colorbar(cbar2, ax=bx, shrink=0.75, label=flux_label)
+        plt.colorbar(cbar3, ax=dx, shrink=0.75, label=flux_label)
+        plt.colorbar(cbar4, ax=fx, shrink=0.75, label="Flux density [relative/px]")
 
-    # ell = Ellipse((10, 10), minor, major, edgecolor="w", fc="None", lw=1, angle=angle)
-    # ax.add_patch(ell)
-    ell = Ellipse((10, 10), minor, major, edgecolor="w", fc="None", lw=1, angle=angle)
-    fx.add_patch(ell)
+        # ell = Ellipse((10, 10), minor, major, edgecolor="w", fc="None", lw=1, angle=angle)
+        # ax.add_patch(ell)
+        ell = Ellipse(
+            (10, 10), minor, major, edgecolor="w", fc="None", lw=1, angle=angle
+        )
+        fx.add_patch(ell)
 
-    w = convim.shape[0]
+        w = convim.shape[0]
 
-    # xticks = np.array([-w//2, -5/9*50 ,0, 5/9*50, w//2-1]) + w//2
-    # xticklabels = [f'-{w//2*0.018:.1}', '-0.5','0', '0.5' ,f'{w//2*0.018:.1}' ]
-    ax.set_xticks(xticks[::-1])
-    ax.set_xticklabels(xticklabels)
-    bx.set_xticks(xticks[::-1])
-    bx.set_xticklabels(xticklabels)
-    cx.set_xticks(xticks[::-1])
-    cx.set_xticklabels(xticklabels)
-    dx.set_xticks(xticks[::-1])
-    dx.set_xticklabels(xticklabels)
+        # xticks = np.array([-w//2, -5/9*50 ,0, 5/9*50, w//2-1]) + w//2
+        # xticklabels = [f'-{w//2*0.018:.1}', '-0.5','0', '0.5' ,f'{w//2*0.018:.1}' ]
+        ax.set_xticks(xticks[::-1])
+        ax.set_xticklabels(xticklabels)
+        bx.set_xticks(xticks[::-1])
+        bx.set_xticklabels(xticklabels)
+        cx.set_xticks(xticks[::-1])
+        cx.set_xticklabels(xticklabels)
+        dx.set_xticks(xticks[::-1])
+        dx.set_xticklabels(xticklabels)
 
-    ax.set_yticks(xticks)
-    ax.set_yticklabels(xticklabels)
-    bx.set_yticks(xticks)
-    bx.set_yticklabels(xticklabels)
-    cx.set_yticks(xticks)
-    cx.set_yticklabels(xticklabels)
-    dx.set_yticks(xticks)
-    dx.set_yticklabels(xticklabels)
+        ax.set_yticks(xticks)
+        ax.set_yticklabels(xticklabels)
+        bx.set_yticks(xticks)
+        bx.set_yticklabels(xticklabels)
+        cx.set_yticks(xticks)
+        cx.set_yticklabels(xticklabels)
+        dx.set_yticks(xticks)
+        dx.set_yticklabels(xticklabels)
 
-    fx.set_xticks(xticks[::-1])
-    fx.set_xticklabels(xticklabels)
-    fx.set_yticks(xticks)
-    fx.set_yticklabels(xticklabels)
+        fx.set_xticks(xticks[::-1])
+        fx.set_xticklabels(xticklabels)
+        fx.set_yticks(xticks)
+        fx.set_yticklabels(xticklabels)
 
-    ax.set_xlabel(r"$\delta$ RA [arcsec]")
-    ax.set_ylabel(r"$\delta$ DEC [arcsec]")
-    plt.subplots_adjust(wspace=0.1, hspace=0.1)
-    plt.tight_layout()
-    plt.savefig(
-        f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_clean_deconvolution.png"
-    )
-    plt.close()
+        ax.set_xlabel(r"$\delta$ RA [arcsec]")
+        ax.set_ylabel(r"$\delta$ DEC [arcsec]")
+        fig1.subplots_adjust(wspace=0.1, hspace=0.1)
+        fig1.tight_layout()
+        fig1.savefig(
+            f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_clean_deconvolution.png"
+        )
 
-    _ = plt.figure()
-    plt.plot(np.arange(len(iterations)) * 100, iterations)
-    plt.yscale("log")
-    plt.savefig(
-        f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_clean_iterations.png"
-    )
-    plt.close()
+        fig2, ax2 = plt.subplots()
+        ax2.plot(np.arange(len(iterations)) * 100, iterations)
+        ax2.set_yscale("log")
+        fig2.savefig(
+            f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_clean_iterations.png"
+        )
+
+        fig1.show()
+        fig2.show()
+
+        if mode != "interactive":
+            plt.close("all")
+            break
+        else:
+            print(
+                f"Current values-- niter:{n_iter:0f}\tgain:{gain:.7f}\tphat:{phat:.2f}"
+            )
+            command = input(
+                "Change clean parameters ('niter XX', 'gain XX', 'phat XX', 'continue XXX', 'reset', 'automatic XX'), 'help' or 'okay':\t"
+            )
+            if command == "okay":
+                plt.close("all")
+                break
+            if command == "help":
+                print("help info todo")
+            elif "niter" in command:
+                try:
+                    tmp = int(float(command.split()[-1]))
+                    n_iter = tmp
+                    im_to_clean = dirty_im
+                except SyntaxError as e:
+                    logger.warn(PROCESS_NAME, f"Could not parse niter value: {e}")
+            elif "continue" in command:
+                try:
+                    tmp = int(float(command.split()[-1]))
+                    n_iter = tmp
+                    im_to_clean = residual_im
+                except SyntaxError as e:
+                    logger.warn(PROCESS_NAME, f"Could not parse continue value: {e}")
+            elif "reset" in command:
+                try:
+                    n_iter = float(configdata["clean_niter"])  # 1e5
+                    gain = float(configdata["clean_gain"])  # 1e-3
+                    phat = float(configdata["clean_phat"])
+                    im_to_clean = dirty_im
+                    resulting_im = None
+                except SyntaxError as e:
+                    logger.warn(PROCESS_NAME, f"Could not parse reset : {e}")
+            elif "gain" in command:
+                try:
+                    tmp = float(command.split()[-1])
+                    gain = tmp
+                except SyntaxError as e:
+                    logger.warn(PROCESS_NAME, f"Could not parse gain value: {e}")
+            elif "automatic" in command:
+                try:
+                    tmp = float(command.split()[-1])
+                    threshold = tmp
+                    n_iter = float(configdata["clean_niter"])  # 1e5
+                    gain = float(configdata["clean_gain"])  # 1e-3
+                    phat = float(configdata["clean_phat"])
+                    im_to_clean = dirty_im
+                    resulting_im = None
+                except SyntaxError as e:
+                    logger.warn(
+                        PROCESS_NAME, f"Could not parse automatic threshold value: {e}"
+                    )
+            elif "phat" in command:
+                try:
+                    tmp = float(command.split()[-1])
+                    phat = tmp
+                except SyntaxError as e:
+                    logger.warn(PROCESS_NAME, f"Could not parse phat value: {e}")
+            else:
+                print(f"Command not recognized: '{command}'")
+
+            plt.close("all")
 
     return convim, residual_im, resulting_im
 
@@ -492,7 +630,11 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target):
 
 
 def do_deconvolution(
-    configdata: dict, target_configdata: dict, calib_configdata: dict, mylogger: Logger
+    configdata: dict,
+    target_configdata: dict,
+    calib_configdata: dict,
+    mylogger: Logger,
+    interactive=True,
 ) -> bool:
     """
     Wraps the two deconvolution methods, extracting relevant config parameters and saving the results.
@@ -524,6 +666,40 @@ def do_deconvolution(
 
         dirty_im = imshift(dirty_im, *find_max_loc(dirty_im))  # recenter
 
+        if target_configdata["instrument"] != "NOMIC":
+            global PIXEL_SCALE
+            global xticks
+            global xticklabels
+            global yticklabels
+            PIXEL_SCALE = 0.0107  # lmircam arcsec/pixel
+            w = dirty_im.shape[0] // 2
+
+            xticks = np.array(
+                [
+                    -0.5 / PIXEL_SCALE + w,
+                    -0.25 / PIXEL_SCALE + w,
+                    w,
+                    0.25 / PIXEL_SCALE + w,
+                    0.5 / PIXEL_SCALE + w,
+                ]
+            )
+            xticklabels = ["-0.50", "-0.25", "0.0", "0.25", "0.50"]
+            yticklabels = xticklabels[::1]
+        else:
+            w = dirty_im.shape[0] // 2
+            xticks = np.array(
+                [
+                    -0.75 / PIXEL_SCALE + w,
+                    -0.5 / PIXEL_SCALE + w,
+                    -0.25 / PIXEL_SCALE + w,
+                    w,
+                    0.25 / PIXEL_SCALE + w,
+                    0.5 / PIXEL_SCALE + w,
+                    0.75 / PIXEL_SCALE + w,
+                ]
+            )
+            xticklabels = ["", "-0.50", "", "0.0", "", "0.50", ""]
+            yticklabels = xticklabels[::1]
     except KeyError as e:
         logger.error(PROCESS_NAME, f"One or more config entries is incorrect: {e}")
         return False
@@ -544,7 +720,11 @@ def do_deconvolution(
         logger.warn(PROCESS_NAME, "Proceeding without proper flux calibration")
 
     clean_restored, clean_residual, clean_pt_src = wrap_clean(
-        dirty_im, psf_estimate, configdata, targname
+        dirty_im,
+        psf_estimate,
+        configdata,
+        targname,
+        mode="interactive",
     )
     if clean_restored is None:
         return False
