@@ -110,7 +110,8 @@ def do_clean(
     reason = f"niter: {n_iter}"
     new_im = np.copy(dirty_im)
     if threshold is not None:
-        n_iter = 1e7  # something crazy long
+        if threshold > 0:
+            n_iter = 1e7  # something crazy long
     else:
         threshold = -1
     while k < n_iter:  # and delta > 1e-8:
@@ -229,32 +230,34 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
             plt.close("all")
             break
         else:
-            print(
-                f"Current values -- major:{major:.1f}px\tminor:{minor:.1f}px\tpa{angle:.2f}deg "
+            logger.info(
+                PROCESS_NAME,
+                f"Current values -- major:{major:.1f}px\tminor:{minor:.1f}px\tpa:{angle:.2f}deg ",
             )
             command = input(
                 "Modify the psf ('major XX', 'minor XX', 'pa XX') or 'okay':\t"
             )
             if command == "okay":
+                # TODO: save the updated settings
                 plt.close("all")
                 break
             elif "major" in command:
                 try:
                     tmp = float(command.split()[-1])
                     major = tmp
-                except SyntaxError as e:
+                except (SyntaxError, ValueError) as e:
                     logger.warn(PROCESS_NAME, f"Could not parse major axis value: {e}")
             elif "minor" in command:
                 try:
                     tmp = float(command.split()[-1])
                     minor = tmp
-                except SyntaxError as e:
+                except (SyntaxError, ValueError) as e:
                     logger.warn(PROCESS_NAME, f"Could not parse minor axis value: {e}")
             elif "pa" in command:
                 try:
                     tmp = float(command.split()[-1])
                     angle = tmp
-                except SyntaxError as e:
+                except (SyntaxError, ValueError) as e:
                     logger.warn(
                         PROCESS_NAME, f"Could not parse position angle value: {e}"
                     )
@@ -265,7 +268,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
     logger.info(PROCESS_NAME, "Beam selection completed. Continuing ... ")
 
     resulting_im = None
-    im_to_clean = dirty_im
+    im_to_clean = np.copy(dirty_im)
     while True:
         logger.info(PROCESS_NAME, "Starting  CLEAN...")
         resulting_im, residual_im, iterations, _ = do_clean(
@@ -370,7 +373,12 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
             [0.9 / 512, 0.9 / 256, 0.9 / 128, 0.9 / 32, 0.9 / 8, 0.9 / 2]
         )
         ax.contour(
-            xv, yv, convim, levels=spacing * np.max(convim), colors="white", alpha=0.5
+            xv,
+            yv,
+            convim + 0 * residual_im,
+            levels=spacing * np.max(convim),
+            colors="white",
+            alpha=0.5,
         )
 
         ell = Ellipse(
@@ -441,7 +449,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
         fig1.subplots_adjust(wspace=0.1, hspace=0.1)
         fig1.tight_layout()
         fig1.savefig(
-            f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_clean_deconvolution.png"
+            f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_clean_deconvolution.pdf"
         )
 
         fig2, ax2 = plt.subplots()
@@ -458,13 +466,15 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
             plt.close("all")
             break
         else:
-            print(
-                f"Current values-- niter:{n_iter:0f}\tgain:{gain:.7f}\tphat:{phat:.2f}"
+            logger.info(
+                PROCESS_NAME,
+                f"Current values-- niter:{n_iter:0f}\tgain:{gain:.7f}\tphat:{phat:.2f}",
             )
             command = input(
                 "Change clean parameters ('niter XX', 'gain XX', 'phat XX', 'continue XXX', 'reset', 'automatic XX'), 'help' or 'okay':\t"
             )
             if command == "okay":
+                # TODO: save the updated settings
                 plt.close("all")
                 break
             if command == "help":
@@ -473,7 +483,8 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
                 try:
                     tmp = int(float(command.split()[-1]))
                     n_iter = tmp
-                    im_to_clean = dirty_im
+                    im_to_clean = np.copy(dirty_im)
+                    resulting_im = None
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse niter value: {e}")
             elif "continue" in command:
@@ -488,7 +499,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
                     n_iter = float(configdata["clean_niter"])  # 1e5
                     gain = float(configdata["clean_gain"])  # 1e-3
                     phat = float(configdata["clean_phat"])
-                    im_to_clean = dirty_im
+                    im_to_clean = np.copy(dirty_im)
                     resulting_im = None
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse reset : {e}")
@@ -496,6 +507,8 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
                 try:
                     tmp = float(command.split()[-1])
                     gain = tmp
+                    im_to_clean = np.copy(dirty_im)
+                    resulting_im = None
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse gain value: {e}")
             elif "automatic" in command:
@@ -505,7 +518,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
                     n_iter = float(configdata["clean_niter"])  # 1e5
                     gain = float(configdata["clean_gain"])  # 1e-3
                     phat = float(configdata["clean_phat"])
-                    im_to_clean = dirty_im
+                    im_to_clean = np.copy(dirty_im)
                     resulting_im = None
                 except SyntaxError as e:
                     logger.warn(
@@ -515,6 +528,8 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
                 try:
                     tmp = float(command.split()[-1])
                     phat = tmp
+                    im_to_clean = np.copy(dirty_im)
+                    resulting_im = None
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse phat value: {e}")
             else:
@@ -744,7 +759,7 @@ def do_deconvolution(
     }
     res = "matched"
     with open(
-        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_convolved_cleaned_{res}.pkl",
+        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_convolved_cleaned.pkl",
         "wb",
     ) as handle:
         pickle.dump(datadict, handle, protocol=pickle.HIGHEST_PROTOCOL)
