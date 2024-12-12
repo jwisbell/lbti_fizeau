@@ -4,6 +4,7 @@ from sys import argv
 
 from lizard_calibrate import calibrate
 from lizard_reduce import reduce
+from interactive_deconv import clean
 
 if __name__ == "__main__":
     # TODO: allow multiple config files
@@ -18,5 +19,7 @@ if __name__ == "__main__":
             reduce(config)
         case "calibrate":
             calibrate(config)
+        case "clean":
+            clean(config)
         case _:
             print(err_str)

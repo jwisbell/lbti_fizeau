@@ -35,7 +35,7 @@ def wrap_do_convolution(
     logger.info(PROCESS_NAME, "Process `do_deconvolution` finished successfully")
 
 
-def calibrate(configfile):
+def clean(configfile):
     with open(configfile, "r") as inputfile:
         configdata = json.load(inputfile)
 
@@ -80,4 +80,4 @@ if __name__ == "__main__":
         print("No config file specified. Please specify a config file")
         exit()
 
-    calibrate(configfile)
+    clean(configfile)
