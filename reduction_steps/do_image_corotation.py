@@ -194,23 +194,161 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     # 1. Load the data
     # 1a - load the background subtracted frames
     background_subtracted_frames, centroid_positions, all_rotations = (
-        load_bkg_subtracted_files(nod_info, output_dir, target)
+        load_bkg_subtracted_files(nod_info, output_dir, target, skips=skips)
     )
 
     # 1b - load the recentering info from prev step
     datadir = f"{output_dir}/intermediate/frame_selection/"
     num_files = len(glob(f"{datadir}/{target}*imstack*cycle*.npy"))
 
-    info_files = [f"{datadir}/{target}_fs_info_cycle{i+1}.pk" for i in range(num_files)]
+    info_files = np.sort(
+        glob(f"{datadir}/{target}_fs_info_cycle*.pk")
+    )  # [f"{datadir}/{target}_fs_info_cycle{i+1}.pk" for i in range(num_files)]
 
     infos = {}
     for i_f in info_files:
-        with open(i_f, "rb") as handle:
-            info = pickle.load(handle)
-            cycle_num = i_f.split(".pk")[0].split("cycle")[-1]
-            if cycle_num in skips:
-                continue
-            infos[cycle_num] = info
+        print(i_f)
+        try:
+            with open(i_f, "rb") as handle:
+                info = pickle.load(handle)
+                cycle_num = i_f.split(".pk")[0].split("cycle")[-1]
+                if cycle_num in skips:
+                    continue
+                infos[cycle_num] = info
+        except FileNotFoundError:
+            logger.warn(
+                PROCESS_NAME,
+                f"The file {i_f} was not found -- this nod position was likely skipped!",
+            )
+
+    # 2. for each individual image,
+    # apply shifts
+    # apply rotation
+    rotation_dict = _process_rotations(
+        infos,
+        background_subtracted_frames,
+        centroid_positions,
+        all_rotations,
+        extraction_size,
+    )
+    # print(len(properly_rotated_ims), len(properly_rotated_ims) / 58)
+    # _ = input("continue?")
+
+    # 3. Add all cycles together to get final observation PSF
+    # compute the necessary images from the above rotation dict
+    # 1. the summed, corotated image
+    # 2. the summed, unrotated image
+    sum_rotated = 0
+    sum_unrotated = 0
+    sum_std = 0
+    count = 0
+    for _, entry in rotation_dict.items():
+        # for some reason these need to be recentered again
+        centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
+        centered_unrot, x, y = recenter(np.sum(entry["centered_unrot"], 0))
+        sum_rotated += centered_rot
+        sum_unrotated += centered_unrot
+        sum_std += np.roll(
+            np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
+        )
+        count += len(entry["ims"])
+    mean_rotated = sum_rotated / count
+    mean_unrotated = sum_unrotated / count
+    mean_std = sum_std / count
+
+    psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
+    stacked_rotated_im = mean_rotated
+
+    # also plot the individual/combined PSFs
+    # stacked_rotated_im = np.mean(properly_rotated_ims, 0)
+    _plot_cycles(
+        rotation_dict,
+        stacked_rotated_im,
+        psf_unrotated_percentiles,
+        target,
+        output_dir,
+    )
+
+    # 4. Save to disk
+
+    # this is multiple GB, default to not saving
+    # df = pd.DataFrame.from_dict(proper_rotations)
+    # df.to_pickle(f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_rotated_ims.pkl")
+
+    print([len(rotation_dict[nod]["rots"]) for nod in rotation_dict])
+
+    kept_rots = []
+    for _, entry in rotation_dict.items():
+        for rot in entry["rots"]:
+            kept_rots.append(rot)
+    # kept_rots = np.array(
+    # [rotation_dict[nod]["rots"] for nod in rotation_dict]
+    # ).flatten()
+    kept_rots = np.array(kept_rots)
+
+    unrotated_per_nod = {
+        nod: np.mean(rotation_dict[nod]["centered_unrot"], 0) for nod in rotation_dict
+    }
+    with open(
+        f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_unrotated_cycle_stacks.pkl",
+        "wb",
+    ) as pkl:
+        pickle.dump(unrotated_per_nod, pkl, protocol=pickle.HIGHEST_PROTOCOL)
+
+    np.save(
+        f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_included_rotations.npy",
+        kept_rots,
+    )
+
+    np.save(
+        f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_corotated_stacked_im.npy",
+        stacked_rotated_im,
+    )
+
+    np.save(
+        f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_unrotated_stacked_psf.npy",
+        psf_unrotated_percentiles,
+    )
+    return True
+
+
+def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
+    """
+    Docstring for single dish image rotation
+    """
+    global logger
+    logger = mylogger
+
+    # 0. Parse the config info
+    try:
+        nod_info = config["nod_info"]
+        target = config["target"]
+        output_dir = config["output_dir"]
+        skips = config["skips"]
+        extraction_size = config["sub_window"]
+    except KeyError as e:
+        logger.error(PROCESS_NAME, f"Key missing from config: {e}")
+        return False
+
+    # 1. Load the data
+    # 1a - load the background subtracted frames
+    background_subtracted_frames, centroid_positions, all_rotations = (
+        load_bkg_subtracted_files(nod_info, output_dir, target, skips=skips)
+    )
+
+    # TODO: replace this with new recentering step
+    # 1b - load the recentering info from prev step
+    datadir = f"{output_dir}/intermediate/bkg_subtraction/"
+    num_files = len(glob(f"{datadir}/{target}*subtracted*cycle*.npy"))
+
+    infos = {}
+    for k, entry in background_subtracted_frames.items():
+        if "off" in k or "bkg" in k:
+            continue
+        infos[k] = {}
+        infos[k]["mask"] = np.array([True for _ in entry])
+        infos[k]["shiftsx"] = np.array([0 for _ in entry])
+        infos[k]["shiftsy"] = np.array([0 for _ in entry])
 
     # 2. for each individual image,
     # apply shifts

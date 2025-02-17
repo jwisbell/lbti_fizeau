@@ -3,7 +3,7 @@
 from sys import argv
 
 from lizard_calibrate import calibrate
-from lizard_reduce import reduce
+from lizard_reduce import reduce, singledish
 from interactive_deconv import clean
 
 if __name__ == "__main__":
@@ -21,5 +21,7 @@ if __name__ == "__main__":
             calibrate(config)
         case "clean":
             clean(config)
+        case "singledish":
+            singledish(config)
         case _:
             print(err_str)

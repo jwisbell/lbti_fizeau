@@ -171,7 +171,7 @@ def _plot_beamsize(
         xv, yv, psf_estimate, levels=np.array([0.25, 0.50, 0.75]) * np.max(psf_estimate)
     )
     ell = Ellipse(
-        xy=(psf_estimate.shape[0] // 2 - 1, psf_estimate.shape[1] // 2 - 1),
+        xy=(psf_estimate.shape[0] // 2 + 1, psf_estimate.shape[1] // 2 - 1),
         width=minor,
         height=major,
         angle=angle,
@@ -182,6 +182,7 @@ def _plot_beamsize(
     )
     ax = plt.gca()
     ax.add_patch(ell)
+    ax.set_aspect("equal")
     plt.title(
         f"Restoring Beam: approx {minor} x {major} px ({minor*PIXEL_SCALE*1000:0.1f} x {major*PIXEL_SCALE*1000:0.1f} mas)"
     )
@@ -485,6 +486,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
                     n_iter = tmp
                     im_to_clean = np.copy(dirty_im)
                     resulting_im = None
+                    threshold = -1
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse niter value: {e}")
             elif "continue" in command:
@@ -509,6 +511,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
                     gain = tmp
                     im_to_clean = np.copy(dirty_im)
                     resulting_im = None
+                    threshold = -1
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse gain value: {e}")
             elif "automatic" in command:

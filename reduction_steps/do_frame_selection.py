@@ -177,19 +177,24 @@ def add_circle(im, xc, yc, r):
     return new_im
 
 
-def _mk_model_psf():
+def _mk_model_psf(mode="fiz"):
     # make a model of the fringe pattern
     # TODO: rescale based on the detector
     size = 120
     model = np.zeros((size, size))  # (extraction_size,extraction_size))
     xv, yv = np.meshgrid(np.arange(-size / 2, size / 2), np.arange(-size / 2, size / 2))
 
-    model = add_circle(model, size // 2 - 9, size // 2, 6.5)
-    model = add_circle(model, size // 2 + 9, size // 2, 6.5)
+    if mode == "fiz":
+        model = add_circle(model, size // 2 - 9, size // 2, 6.5)
+        model = add_circle(model, size // 2 + 9, size // 2, 6.5)
+    elif mode == "singledish":
+        model = add_circle(model, size // 2, size // 2, 8.5)
 
+    """
     min_scale = (
         1.22 * 8.6e-6 / (8.4) * 206265 / (2 * np.sqrt(2 * np.log(2)))
     )  # sigma, in arcsec
+    """
 
     fft = np.fft.fft2(model)
     fft = np.fft.fftshift(fft)
@@ -198,7 +203,9 @@ def _mk_model_psf():
     psf = np.abs(fft)
 
     model_psf = psf
-    model_psf *= gauss(xv, yv, 0, 0, 6.5 * 3, 6.5 * 3, 0, 1)
+
+    if mode == "fiz":
+        model_psf *= gauss(xv, yv, 0, 0, 6.5 * 8, 6.5 * 8, 0, 1)
 
     return model_psf
 
@@ -500,9 +507,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         color="orange",
     )
     axarr[1][0].set_title("Tip")
-    axarr[1][0].set_xlabel(
-        r"$\Delta$" + "Phase (top-bottom)\n[fractions of a wavelength]"
-    )
+    axarr[1][0].set_xlabel(r"$\Delta$" + "Phase (top-bottom)\n[radians]")
     yh, _, _ = axarr[1][1].hist(
         phase_dict["central"], bins=bins, histtype="stepfilled", color="k"
     )
@@ -514,7 +519,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
     )
     axarr[1][1].plot([1, 1], [0, np.max(yh)], "k--")
     axarr[1][1].plot([-1, -1], [0, np.max(yh)], "k--")
-    axarr[1][1].set_xlabel("Fourier Phase\n[fractions of a wavelength]")
+    axarr[1][1].set_xlabel("Fourier Phase\n[radians]")
     axarr[1][1].set_title("Piston")
     axarr[1][2].hist(
         phase_dict["lr"], bins=bins, histtype="stepfilled", color="dodgerblue"
@@ -525,9 +530,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         histtype="stepfilled",
         color="orange",
     )
-    axarr[1][2].set_xlabel(
-        r"$\Delta$" + "Phase (left-right)\n[fractions of a wavelength]"
-    )
+    axarr[1][2].set_xlabel(r"$\Delta$" + "Phase (left-right)\n[radians]")
     axarr[1][2].set_title("Tilt")
 
     axarr[0][2].plot(
@@ -579,6 +582,11 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
         logger.error(PROCESS_NAME, f"Key missing from config: {e}")
         return False
 
+    try:
+        mode = config["mode"]  # singledish or fizeau supported
+    except KeyError:
+        mode = "fiz"  # default to fizeau
+
     # load the psf
     if psfname != "model":
         try:
@@ -594,7 +602,7 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
     for name, _ in nod_info.items():
         if name in skips:
             continue
-        if "bkg" in name:
+        if "bkg" in name or "off" in name:
             continue
         cent = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
@@ -611,7 +619,76 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
     # do all frames for actual processing
     for key in bg_subtracted_frames:
         logger.info(PROCESS_NAME, f"Processing nod {key}...")
-        mypsf = _mk_model_psf()
+        mypsf = _mk_model_psf(mode=mode)
+        if psfname != "model":
+            mypsf = empirical_psf
+        _frame_centering_and_selection(
+            key,
+            bg_subtracted_frames,
+            centroid_positions,
+            rotations,
+            f"{output_dir}",
+            target,
+            instrument=instrument,
+            do_save=True,
+            cutoff_fraction=CUTOFF_FRACTION,
+            usepsf=mypsf,
+            do_offset=False,
+        )
+        logger.info(PROCESS_NAME, "#" * 128)
+
+    return True
+
+
+def do_frame_selection_sd(config: dict, mylogger: Logger) -> bool:
+    global logger
+    logger = mylogger
+
+    try:
+        target = config["target"]
+        nod_info = config["nod_info"]
+        instrument = config["instrument"]
+        output_dir = config["output_dir"]
+        skips = config["skips"]
+        CUTOFF_FRACTION = config["cutoff_fraction"]
+        psfname = config["psfname"]
+    except KeyError as e:
+        logger.error(PROCESS_NAME, f"Key missing from config: {e}")
+        return False
+
+    # load the psf
+    if psfname != "model":
+        try:
+            empirical_psf = np.load(psfname)[0]
+            print(empirical_psf.shape)
+        except FileNotFoundError:
+            logger.error(PROCESS_NAME, f"PSF {psfname} not found. Exiting...")
+            return False
+
+    centroid_positions = {}
+    bg_subtracted_frames = {}  # key: window_background_subtraction(ims[key], backgrounds[nod_info[key]["subtract"]]["mean"], nod_info[key]["position"]) for key in ims.keys()}
+    rotations = {}
+    for name, _ in nod_info.items():
+        if name in skips:
+            continue
+        if "bkg" in name or "off" in name:
+            continue
+        cent = np.load(
+            f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
+        )
+        bkgsubtracted_ims = np.load(
+            f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
+        )
+        rotations[name] = np.load(
+            f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
+        )
+        bg_subtracted_frames[name] = bkgsubtracted_ims
+        centroid_positions[name] = cent
+
+    # do all frames for actual processing
+    for key in bg_subtracted_frames:
+        logger.info(PROCESS_NAME, f"Processing nod {key}...")
+        mypsf = _mk_model_psf(mode="singledish")
         if psfname != "model":
             mypsf = empirical_psf
         _frame_centering_and_selection(

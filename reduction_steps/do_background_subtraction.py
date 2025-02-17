@@ -77,16 +77,19 @@ def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
                 with fits.open(filename) as x:
                     im = np.copy(x[0].data)
                     if len(x[0].data.shape) > 2:
-                        im = np.copy(x[0].data[0])
+                        im = np.copy(x[0].data[-1])
                         if instrument != "NOMIC":
-                            im = np.copy(x[0].data)  # [-1])
+                            im = np.copy(x[0].data[-1])  # [-1])
                         # im = np.array([x[0] for x in im])
-                    temp.append(im)  # extract_window(im, entry['position']) )
+                    temp.append(_extract_window(im, entry["position"]))
                     pa = float(x[0].header["LBT_PARA"])
                     temp_pas.append(pa)
                     # return
             except FileNotFoundError as e:
                 logger.warn(PROCESS_NAME, f"\t\t {filename} failed, {e}")
+                continue
+            except OSError as e:
+                print(filename)
                 continue
         images[name] = temp
         pas[name] = temp_pas  # angle_mean(temp_pas)
@@ -100,7 +103,7 @@ def _window_background_subtraction(im_arr, background, window_center):
     # do the background subtraction inside a subwindow
     images = []
     for im in im_arr:
-        test = _extract_window(im - background, window_center)
+        test = im - background  # _extract_window(im - background, window_center)
         images.append(np.array(test))
     # logger.info(PROCESS_NAME,len(images))
     return images
@@ -128,7 +131,7 @@ def _qa_plots(bg_subtracted_frames, ims, centroid_positions, output_dir, target)
     # ## (optional) Plot cycles to quickly assess quality
     # HTML(image_video(bg_subtracted_frames["1"][::2],"2").to_html5_video())
     for key in bg_subtracted_frames.keys():
-        if "bkg" in key:
+        if "bkg" in key or "off" in key:
             continue
         _ = plt.figure()
         plt.imshow(
@@ -211,7 +214,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
                 "mean": np.nanmean(entry, 0),
                 "std": np.nanstd(entry, 0),
             }
-
+        print(list(backgrounds.keys()))
         bg_subtracted_frames = {
             key: _window_background_subtraction(
                 ims[key],
@@ -227,16 +230,17 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         for key in bg_subtracted_frames.keys():
             x = bg_subtracted_frames[key]
             logger.info(PROCESS_NAME, f"Processing key {key}")
-            if "bkg" in key:
-                continue
+            # if "bkg" in key or "off" in key:
+            # continue
             im = np.sum(bg_subtracted_frames[key], 0)
-            im = median_filter(im, 3)
+            im = median_filter(im, 7)
             centroid_positions[key] = [
                 np.argmax(np.nansum(im, 0)),
                 np.argmax(np.nansum(im, 1)),
             ]
-            if extraction_size >= ims[key][0].shape[0]:
-                centroid_positions[key] = nod_info[key]["position"]
+            print(centroid_positions)
+            # if extraction_size >= ims[key][0].shape[0]:
+            #    centroid_positions[key] = nod_info[key]["position"]
 
             np.save(
                 f"{output_dir}/{process_path}/{target}_centroid-positions_cycle{key}.npy",
@@ -255,7 +259,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             _qa_plots(bg_subtracted_frames, ims, centroid_positions, output_dir, target)
         except Exception as e:
             logger.error(PROCESS_NAME, f"_qa_plots failed due to {e}")
-            return False
+            # return False
 
         num_processed += batch_size
         logger.info(
