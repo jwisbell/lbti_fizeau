@@ -79,8 +79,8 @@ def _plot_cycles(
 
     for k, key in enumerate(imdict.keys()):
         ims = imdict[key]["ims"]
-        # rotim, _, _ = recenter(np.mean(ims, 0))
-        rotim = np.mean(ims, 0)
+        rotim, _, _ = recenter(np.mean(ims, 0))
+        # rotim = np.mean(ims, 0)
 
         ax = axarr.flatten()[k]
 
@@ -274,7 +274,7 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     mean_std = sum_std / count
 
     psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
-    stacked_rotated_im = mean_rotated
+    stacked_rotated_im, _, _ = recenter(mean_rotated)
 
     # also plot the individual/combined PSFs
     # stacked_rotated_im = np.mean(properly_rotated_ims, 0)

@@ -21,7 +21,7 @@ from scipy.optimize import least_squares
 import pickle
 
 from utils.util_logger import Logger
-from utils.utils import gauss
+from utils.utils import argmax2d, gauss
 
 PROCESS_NAME = "deconvolution"
 is_flux_cal = False
@@ -56,11 +56,12 @@ def find_max_loc(im, do_median=False):
     # w = im.shape[0]
     # temp_im = np.copy(im)[w//2-w//4:w//2+w//4,w//2-w//4:w//2+w//4]
     temp_im = np.copy(im)
-    if do_median:
-        temp_im = median_filter(im, 5)
+    # if do_median:
+    # temp_im = median_filter(im, 5)
     idx = np.argmax(np.abs(temp_im))
     # idx  = np.argmax(im )
     x, y = np.unravel_index(idx, im.shape)
+    # x, y = argmax2d(np.abs(temp_im))
 
     return x, y
 
@@ -73,8 +74,8 @@ def imshift(im, x, y):
     # roll the im along each axis so that peak is at x,y
     wx = im.shape[0] // 2
     wy = im.shape[1] // 2
-    temp_im = np.roll(im, x - wx, axis=1)
-    return np.roll(temp_im, y - wy, axis=0)
+    temp_im = np.roll(im, wx - x, axis=1)
+    return np.roll(temp_im, wy - y, axis=0)
 
 
 def do_convolution(im, psf):
@@ -193,8 +194,9 @@ def do_clean(
             break
         shifted_beam = np.copy(beam)
         shifted_beam = imshift(
-            shifted_beam, pk_y, pk_x
+            shifted_beam, -pk_y, -pk_x
         )  # move the psf to the "peak" location
+
         # scale shifted beam to flux * gain
         shifted_beam *= im_i[pk_x, pk_y] * gain
 
@@ -254,11 +256,11 @@ def _plot_beamsize(
         xv,
         yv,
         psf_model,
-        levels=np.array([0.25, 0.50, 0.75]) * np.max(psf_estimate),
-        cmap="magma",
+        levels=np.array([0.25, 0.50, 0.75]) * np.max(psf_model),
+        cmap="Reds",
     )
     ell = Ellipse(
-        xy=(psf_estimate.shape[0] // 2 + 1, psf_estimate.shape[1] // 2 - 1),
+        xy=(psf_estimate.shape[1] // 2, psf_estimate.shape[0] // 2),
         width=minor,
         height=major,
         angle=angle,
@@ -272,7 +274,7 @@ def _plot_beamsize(
     ax.set_aspect("equal")
 
     ell2 = Ellipse(
-        xy=(psf_estimate.shape[0] // 2 + 1, psf_estimate.shape[1] // 2 - 1),
+        xy=(psf_estimate.shape[0] // 2, psf_estimate.shape[1] // 2),
         width=fitted_gauss[1],
         height=fitted_gauss[0],
         angle=fitted_gauss[2],
@@ -395,7 +397,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
         logger.info(PROCESS_NAME, "Starting  CLEAN...")
         resulting_im, residual_im, iterations, _ = do_clean(
             im_to_clean,
-            psf_estimate,
+            np.copy(psf_estimate),
             n_iter=n_iter,
             gain=gain,
             threshold=threshold,
@@ -410,7 +412,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
         mygauss = gauss(
             xv,
             yv,
-            resulting_im.shape[0] // 2,
+            resulting_im.shape[1] // 2,
             resulting_im.shape[0] // 2,
             major / (2 * np.sqrt(2 * np.log(2))),
             minor / (2 * np.sqrt(2 * np.log(2))),
@@ -822,11 +824,14 @@ def do_deconvolution(
 
         psf_estimate -= np.mean(psf_estimate[:20, :20])
         psf_estimate /= np.max(psf_estimate)
+        # TODO: check the recentering...
         psf_estimate = imshift(
             psf_estimate, *find_max_loc(psf_estimate, do_median=False)
         )  # recenter
 
-        dirty_im = imshift(dirty_im, *find_max_loc(dirty_im))  # recenter
+        dirty_im = imshift(
+            dirty_im, *find_max_loc(dirty_im, do_median=False)
+        )  # recenter
 
         if target_configdata["instrument"] != "NOMIC":
             global PIXEL_SCALE
