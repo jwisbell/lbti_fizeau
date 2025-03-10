@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm
 import pickle
-from scipy.ndimage import rotate
+from scipy.ndimage import rotate, median_filter
 from glob import glob
 from utils.util_logger import Logger
 from utils.utils import argmax2d
@@ -26,6 +26,13 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
     bg_subtracted_frames = {}  # key: window_background_subtraction(ims[key], backgrounds[nod_info[key]["subtract"]]["mean"], nod_info[key]["position"]) for key in ims.keys()}
     centroid_positions = {}
     rotations = {}
+
+    # TODO: delete this
+    lsum = 0
+    lcount = 0
+    msum = 0
+    mcount = 0
+
     for name, _ in nod_info.items():
         if name in skips:  # ['6','7','11']:
             continue
@@ -35,6 +42,12 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
             f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
         )
         bg_subtracted_frames[name] = bkgsubtracted_ims
+        if "m" in name:
+            msum += np.sum(bkgsubtracted_ims)
+            mcount += len(bkgsubtracted_ims)
+        else:
+            lsum += np.sum(bkgsubtracted_ims)
+            lcount += len(bkgsubtracted_ims)
         cent = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
         )
@@ -43,6 +56,13 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
         rotations[name] = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
         )
+
+    """
+    ratio = 2.227264280094873  # (msum / mcount) / (lsum / lcount)
+    for name, v in bg_subtracted_frames.items():
+        if "m" in name:
+            v /= ratio
+    """
     return bg_subtracted_frames, centroid_positions, rotations
 
 
@@ -59,7 +79,8 @@ def _plot_cycles(
 
     for k, key in enumerate(imdict.keys()):
         ims = imdict[key]["ims"]
-        rotim, _, _ = recenter(np.mean(ims, 0))
+        # rotim, _, _ = recenter(np.mean(ims, 0))
+        rotim = np.mean(ims, 0)
 
         ax = axarr.flatten()[k]
 
@@ -137,17 +158,13 @@ def _process_rotations(
                 new_im = np.roll(new_im, -shiftsx[i], axis=1)
                 new_im = np.roll(new_im, -shiftsy[i], axis=0)
 
-                # probably best not to normalize ...
-                # new_im -= np.min(new_im)
-                # new_im /= np.max(new_im)
-
                 # rotate to North
                 pa = rotations[i]
                 rotim = rotate(new_im, -pa, reshape=False, mode="nearest")
-
                 temp_imarr.append(rotim)
                 temp_rotarr.append(pa)
                 temp_unrotarr.append(new_im)
+
                 # unrotated_ims.append(new_im)
                 # properly_rotated_ims.append(rotim)
 
@@ -165,7 +182,7 @@ def _process_rotations(
 
 
 def recenter(im):
-    x, y = argmax2d(im)
+    x, y = argmax2d(median_filter(im, 3))
 
     new_im = np.roll(im, im.shape[1] // 2 - x, axis=1)
     new_im = np.roll(new_im, im.shape[0] // 2 - y, axis=0)

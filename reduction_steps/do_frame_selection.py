@@ -46,8 +46,8 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
             im, np.copy(psf), mode="same", boundary="fill", fillvalue=0
         )
         max_row, max_col = argmax2d(cross_correlation)
-        shift_x = max_row[0] - im.shape[0] // 2 + 1
-        shift_y = max_col[0] - im.shape[1] // 2 + 1
+        shift_x = max_row - im.shape[0] // 2 + 1
+        shift_y = max_col - im.shape[1] // 2 + 1
 
         # shift the image accordingly
         new_im = np.roll(temp_im, -shift_x, axis=1)

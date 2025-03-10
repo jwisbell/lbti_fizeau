@@ -143,9 +143,10 @@ def do_flux_calibration(
     """
 
     temp = glob(
-        f"{calib_output_dir}/intermediate/frame_selection/{target_name}*info*.pk"
+        f"{target_output_dir}/intermediate/frame_selection/{target_name}*info*.pk"
     )
     target_files = {(f.split(".pk")[0].split("_")[-1])[5:]: f for f in temp}
+    print(target_files)
 
     logger.info(PROCESS_NAME, f"Loading the target ({target_name}) files...")
     try:

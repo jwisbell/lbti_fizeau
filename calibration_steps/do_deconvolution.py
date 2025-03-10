@@ -13,10 +13,11 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from scipy.ndimage import rotate
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, median_filter
 from skimage import restoration
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse
+from scipy.optimize import least_squares
 import pickle
 
 from utils.util_logger import Logger
@@ -50,11 +51,14 @@ mpl.rcParams["ytick.direction"] = "in"
 mpl.rcParams["ytick.right"] = True
 
 
-def find_max_loc(im):
+def find_max_loc(im, do_median=False):
     # find the x,y coords of peak of 2d array
     # w = im.shape[0]
     # temp_im = np.copy(im)[w//2-w//4:w//2+w//4,w//2-w//4:w//2+w//4]
-    idx = np.argmax(np.abs(im))
+    temp_im = np.copy(im)
+    if do_median:
+        temp_im = median_filter(im, 5)
+    idx = np.argmax(np.abs(temp_im))
     # idx  = np.argmax(im )
     x, y = np.unravel_index(idx, im.shape)
 
@@ -82,6 +86,74 @@ def do_convolution(im, psf):
 def derotate(frame, rot):
     new_frame = rotate(frame, rot, reshape=False)
     return new_frame
+
+
+def fit_func(params, y):
+    psf_est = y
+    xv, yv = np.meshgrid(
+        np.arange(-psf_est.shape[1] // 2, psf_est.shape[1] // 2),
+        np.arange(-psf_est.shape[0] // 2, psf_est.shape[0] // 2),
+    )
+    model = gauss(
+        xv,
+        yv,
+        0,
+        0,
+        params[0] / (2 * np.sqrt(2 * np.log(2))),
+        params[1] / (2 * np.sqrt(2 * np.log(2))),
+        params[2],
+        np.mean(
+            psf_est[
+                psf_est.shape[0] // 2 - 3 : psf_est.shape[0] // 2 + 3,
+                psf_est.shape[1] // 2 - 3 : psf_est.shape[1] // 2 + 3,
+            ]
+        ),
+    )
+    residuals = psf_est.flatten() - model.flatten()
+    return residuals
+
+
+def fit_gauss(psf_est, level=0.0):
+    # return the major, minor, and pa of a gaussian
+    # data = median_filter(psf_est, 3)
+    data = np.copy(psf_est)
+    cut = level * np.max(data)
+    data -= cut
+    data[data < 0] = 0
+
+    x0 = [5, 5, 0]
+    # TODO: clip the psf_est
+    res = least_squares(fit_func, x0, args=([data]))
+    xv, yv = np.meshgrid(
+        np.arange(-psf_est.shape[1] // 2, psf_est.shape[1] // 2),
+        np.arange(-psf_est.shape[0] // 2, psf_est.shape[0] // 2),
+    )
+    model = gauss(
+        xv,
+        yv,
+        0,
+        -1,
+        res.x[0] / (2 * np.sqrt(2 * np.log(2))),
+        res.x[1] / (2 * np.sqrt(2 * np.log(2))),
+        res.x[2],
+        np.mean(
+            psf_est[
+                psf_est.shape[0] // 2 - 3 : psf_est.shape[0] // 2 + 3,
+                psf_est.shape[1] // 2 - 3 : psf_est.shape[1] // 2 + 3,
+            ]
+        ),
+    )
+    """fig, (ax, bx, cx) = plt.subplots(1, 3)
+    ax.imshow(psf_est, origin="lower", vmax=np.max(psf_est))
+    bx.imshow(model, origin="lower", vmax=np.max(psf_est))
+    cx.imshow(psf_est - model, origin="lower", vmax=np.max(psf_est))
+    plt.show()
+    plt.close()"""
+    return [
+        res.x[0] / (2 * np.sqrt(2 * np.log(2))),
+        res.x[1] / (2 * np.sqrt(2 * np.log(2))),
+        res.x[2],
+    ], model
 
 
 def do_clean(
@@ -166,9 +238,24 @@ def _plot_beamsize(
         np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
     )
 
-    print(xv.shape, yv.shape, psf_estimate.shape)
+    # TODO: fit a gaussian
+    fitted_gauss, psf_model = fit_gauss(psf_estimate, level=0.0)
+    # psf_model = imshift(psf_model, *find_max_loc(psf_model))
+    print(fitted_gauss, "test")
+
     plt.contour(
-        xv, yv, psf_estimate, levels=np.array([0.25, 0.50, 0.75]) * np.max(psf_estimate)
+        xv,
+        yv,
+        psf_estimate,
+        levels=np.array([0.25, 0.50, 0.75]) * np.max(psf_estimate),
+        cmap="viridis",
+    )
+    plt.contour(
+        xv,
+        yv,
+        psf_model,
+        levels=np.array([0.25, 0.50, 0.75]) * np.max(psf_estimate),
+        cmap="magma",
     )
     ell = Ellipse(
         xy=(psf_estimate.shape[0] // 2 + 1, psf_estimate.shape[1] // 2 - 1),
@@ -183,8 +270,20 @@ def _plot_beamsize(
     ax = plt.gca()
     ax.add_patch(ell)
     ax.set_aspect("equal")
+
+    ell2 = Ellipse(
+        xy=(psf_estimate.shape[0] // 2 + 1, psf_estimate.shape[1] // 2 - 1),
+        width=fitted_gauss[1],
+        height=fitted_gauss[0],
+        angle=fitted_gauss[2],
+        edgecolor="k",
+        fc="None",
+        lw=3,
+        ls="--",
+    )
+    ax.add_patch(ell2)
     plt.title(
-        f"Restoring Beam: approx {minor} x {major} px ({minor*PIXEL_SCALE*1000:0.1f} x {major*PIXEL_SCALE*1000:0.1f} mas)"
+        f"Restoring Beam: approx {minor} x {major} px ({minor*PIXEL_SCALE*1000:0.1f} x {major*PIXEL_SCALE*1000:0.1f} mas)\n Fitted: {fitted_gauss[1]:0.1f}x{fitted_gauss[0]:0.1f}px, PA:{fitted_gauss[2]:0.1f}deg"
     )
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/psf_fwhm_{targname}.png")
 
@@ -192,6 +291,28 @@ def _plot_beamsize(
         fig1.show()
     else:
         plt.close()
+
+    xv, yv = np.meshgrid(
+        np.arange(-psf_estimate.shape[1] // 2, psf_estimate.shape[1] // 2),
+        np.arange(-psf_estimate.shape[0] // 2, psf_estimate.shape[0] // 2),
+    )
+    model = gauss(
+        xv,
+        yv,
+        0,
+        -1,
+        major,
+        minor,
+        angle,
+        np.mean(
+            psf_estimate[
+                psf_estimate.shape[0] // 2 - 3 : psf_estimate.shape[0] // 2 + 3,
+                psf_estimate.shape[1] // 2 - 3 : psf_estimate.shape[1] // 2 + 3,
+            ]
+        ),
+    )
+
+    return model
 
 
 def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
@@ -217,7 +338,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
         threshold = None
 
     while True:
-        _plot_beamsize(
+        my_gauss = _plot_beamsize(
             psf_estimate,
             minor,
             major,
@@ -319,6 +440,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
         # convim2 = do_convolution(resulting_im * scaling_factor, mygauss)  # + residual_im
 
         lower_resolution *= scaling_factor
+        print(np.sum(convim), np.sum(dirty_im), np.sum(convim) / np.sum(dirty_im))
 
         fig1, axarr = plt.subplots(2, 3, figsize=(12, 6))
         ax, bx, dx, cx, ex, fx = axarr.flatten()
@@ -460,8 +582,28 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
             f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_clean_iterations.png"
         )
 
+        fig3, ax3 = plt.subplots()
+        g = np.copy(my_gauss)
+        g /= np.max(g)
+        g *= np.max(convim)
+        cbar1 = ax3.imshow(
+            g,
+            origin="lower",
+            cmap="Spectral_r",
+            interpolation="none",
+            norm=PowerNorm(vmin=0, vmax=0.95 * np.max(convim), gamma=gamma),
+        )
+        ax3.set_xlabel(r"$\delta$ RA [arcsec]")
+        ax3.set_ylabel(r"$\delta$ DEC [arcsec]")
+        ax3.set_xticks(xticks[::-1])
+        ax3.set_xticklabels(xticklabels)
+        ax3.set_yticks(xticks)
+        ax3.set_yticklabels(xticklabels)
+        ax3.set_aspect("equal")
+
         fig1.show()
         fig2.show()
+        fig3.show()
 
         if mode != "interactive":
             plt.close("all")
@@ -680,7 +822,9 @@ def do_deconvolution(
 
         psf_estimate -= np.mean(psf_estimate[:20, :20])
         psf_estimate /= np.max(psf_estimate)
-        psf_estimate = imshift(psf_estimate, *find_max_loc(psf_estimate))  # recenter
+        psf_estimate = imshift(
+            psf_estimate, *find_max_loc(psf_estimate, do_median=False)
+        )  # recenter
 
         dirty_im = imshift(dirty_im, *find_max_loc(dirty_im))  # recenter
 
