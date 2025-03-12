@@ -70,7 +70,7 @@ def find_max_loc(im, do_median=False):
 # print(find_max_loc(psf_estimate))
 
 
-def imshift(im, x, y):
+def imshift(im, y, x):
     # roll the im along each axis so that peak is at x,y
     wx = im.shape[0] // 2
     wy = im.shape[1] // 2
@@ -125,7 +125,7 @@ def fit_gauss(psf_est, level=0.0):
     x0 = [5, 5, 0]
     # TODO: clip the psf_est
     res = least_squares(fit_func, x0, args=([data]))
-    xv, yv = np.meshgrid(
+    yv, xv = np.meshgrid(
         np.arange(-psf_est.shape[1] // 2, psf_est.shape[1] // 2),
         np.arange(-psf_est.shape[0] // 2, psf_est.shape[0] // 2),
     )
@@ -194,7 +194,7 @@ def do_clean(
             break
         shifted_beam = np.copy(beam)
         shifted_beam = imshift(
-            shifted_beam, -pk_y, -pk_x
+            shifted_beam, -pk_x, -pk_y
         )  # move the psf to the "peak" location
 
         # scale shifted beam to flux * gain
@@ -236,7 +236,7 @@ def _plot_beamsize(
     Plots the FWHM of the psf calibration in comparison to the supplied ellipse parameters
     """
     fig1 = plt.figure()
-    xv, yv = np.meshgrid(
+    yv, xv = np.meshgrid(
         np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
     )
 
@@ -274,7 +274,7 @@ def _plot_beamsize(
     ax.set_aspect("equal")
 
     ell2 = Ellipse(
-        xy=(psf_estimate.shape[0] // 2, psf_estimate.shape[1] // 2),
+        xy=(psf_estimate.shape[1] // 2, psf_estimate.shape[0] // 2),
         width=fitted_gauss[1],
         height=fitted_gauss[0],
         angle=fitted_gauss[2],
@@ -294,7 +294,7 @@ def _plot_beamsize(
     else:
         plt.close()
 
-    xv, yv = np.meshgrid(
+    yv, xv = np.meshgrid(
         np.arange(-psf_estimate.shape[1] // 2, psf_estimate.shape[1] // 2),
         np.arange(-psf_estimate.shape[0] // 2, psf_estimate.shape[0] // 2),
     )
@@ -824,7 +824,6 @@ def do_deconvolution(
 
         psf_estimate -= np.mean(psf_estimate[:20, :20])
         psf_estimate /= np.max(psf_estimate)
-        # TODO: check the recentering...
         psf_estimate = imshift(
             psf_estimate, *find_max_loc(psf_estimate, do_median=False)
         )  # recenter
