@@ -13,7 +13,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 from scipy.ndimage import rotate
-from scipy.ndimage import gaussian_filter, median_filter
+from scipy.ndimage import gaussian_filter, median_filter, shift
 from skimage import restoration
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse
@@ -56,8 +56,8 @@ def find_max_loc(im, do_median=False):
     # w = im.shape[0]
     # temp_im = np.copy(im)[w//2-w//4:w//2+w//4,w//2-w//4:w//2+w//4]
     temp_im = np.copy(im)
-    # if do_median:
-    # temp_im = median_filter(im, 5)
+    if do_median:
+        temp_im = median_filter(im, 3)
     idx = np.argmax(np.abs(temp_im))
     # idx  = np.argmax(im )
     x, y = np.unravel_index(idx, im.shape)
@@ -811,11 +811,27 @@ def do_deconvolution(
         targ_output_dir = target_configdata["output_dir"]
         targname = target_configdata["target"]
         obsdate = target_configdata["obsdate"]
+
+        # Load the dirty image
         dirty_im = np.load(
             f"{targ_output_dir}/intermediate/corotate/{targname}_corotated_stacked_im.npy"
         )
         dirty_im -= np.min(dirty_im)
+        dirty_im -= np.mean(dirty_im[:15, :15])  # TODO: remove background???
 
+        try:
+            if target_configdata["mode"] == "singledish":
+                dirty_im = median_filter(dirty_im, 3)
+                # TODO: also do this for Fizeau???
+        except KeyError:
+            # Fizeau mode, the default
+            pass
+
+        dirty_im = imshift(
+            dirty_im, *find_max_loc(dirty_im, do_median=False)
+        )  # recenter
+
+        # Load the psf image
         output_dir = configdata["output_dir"]
         calibname = calib_configdata["target"]
         psf_estimate = np.load(
@@ -825,12 +841,16 @@ def do_deconvolution(
         psf_estimate -= np.mean(psf_estimate[:20, :20])
         psf_estimate /= np.max(psf_estimate)
         psf_estimate = imshift(
-            psf_estimate, *find_max_loc(psf_estimate, do_median=False)
+            psf_estimate, *find_max_loc(psf_estimate, do_median=True)
         )  # recenter
 
-        dirty_im = imshift(
-            dirty_im, *find_max_loc(dirty_im, do_median=False)
-        )  # recenter
+        try:
+            if calib_configdata["mode"] == "singledish":
+                psf_estimate = median_filter(psf_estimate, 3)
+                # TODO: also do this for Fizeau???
+        except KeyError:
+            # Fizeau mode, the default
+            pass
 
         if target_configdata["instrument"] != "NOMIC":
             global PIXEL_SCALE
@@ -879,6 +899,10 @@ def do_deconvolution(
         dirty_im /= np.sum(dirty_im)
         dirty_im *= flux_percentiles[1] * 1000
         logger.info(PROCESS_NAME, "Flux calibration successfully loaded!")
+        np.save(
+            f"{output_dir}/calibrated/flux_calibration/sci_{targname}_with_cal_{calibname}_flux_calibrated_im.npy",
+            dirty_im,
+        )
 
     except FileNotFoundError:
         # flux files not present

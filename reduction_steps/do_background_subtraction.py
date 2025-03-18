@@ -79,7 +79,9 @@ def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
                     if len(x[0].data.shape) > 2:
                         im = np.copy(x[0].data[-1])
                         if instrument != "NOMIC":
-                            im = np.copy(x[0].data[-1])  # [-1])
+                            im = np.copy(
+                                x[0].data[-2]
+                            )  # TODO: change back after 1068  # [-1])
                         # im = np.array([x[0] for x in im])
                     temp.append(_extract_window(im, entry["position"]))
                     pa = float(x[0].header["LBT_PARA"])

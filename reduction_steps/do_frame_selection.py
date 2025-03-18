@@ -31,6 +31,7 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
     corrected_ims = []
     shiftsx = []
     shiftsy = []
+    snr = []
     for temp_im in images:
         im = np.copy(temp_im)
 
@@ -52,6 +53,8 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
         # shift the image accordingly
         new_im = np.roll(temp_im, -shift_x, axis=1)
         new_im = np.roll(new_im, -shift_y, axis=0)
+
+        snr.append(np.percentile(new_im, 95) / np.std(new_im[:10, :10]))
 
         corrected_ims.append(new_im)
         shiftsx.append(shift_x)
@@ -82,6 +85,11 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
     s = np.argsort(correlation_vals)
     mask = np.zeros(len(correlation_vals))
     mask[s[-int(len(s) * keep_fraction) :]] = 1
+    logger.info(
+        PROCESS_NAME,
+        f"The SNR of the frames after cc is {np.percentile(snr, [50-34,50,50+34])}",
+    )
+
     return (
         correlation_vals,
         corrected_ims,
