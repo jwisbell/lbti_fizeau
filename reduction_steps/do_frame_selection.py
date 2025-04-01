@@ -83,8 +83,11 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
             plt.close()
 
     s = np.argsort(correlation_vals)
+    cutoff = np.percentile(correlation_vals, (1 - keep_fraction) * 100)
     mask = np.zeros(len(correlation_vals))
-    mask[s[-int(len(s) * keep_fraction) :]] = 1
+    mask[correlation_vals <= cutoff] = 1
+
+    # mask[s[-int(len(s) * keep_fraction) :]] = 1
     logger.info(
         PROCESS_NAME,
         f"The SNR of the frames after cc is {np.percentile(snr, [50-34,50,50+34])}",
@@ -389,8 +392,10 @@ def _frame_centering_and_selection(
             results.append([correlation_vals, corrected_ims, other_info])
 
         mask = other_info["mask"]
-        im_subset = np.array(shift_images(bg_subtracted_frames[nod], other_info))[~mask]
+        im_subset = np.array(shift_images(bg_subtracted_frames[nod], other_info))[mask]
+        print(len(im_subset))
         # im_subset = np.array(bg_subtracted_frames[nod])[mask]
+
         recovered_psf = np.mean(im_subset, 0)
         recovered_psfs.append(recovered_psf)
 
@@ -509,7 +514,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         phase_dict["ud"], bins=bins, histtype="stepfilled", color="firebrick"
     )
     axarr[1][0].hist(
-        np.array(phase_dict["ud"])[~mask],
+        np.array(phase_dict["ud"])[mask],
         bins=bins,
         histtype="stepfilled",
         color="orange",
@@ -520,7 +525,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         phase_dict["central"], bins=bins, histtype="stepfilled", color="k"
     )
     axarr[1][1].hist(
-        np.array(phase_dict["central"])[~mask],
+        np.array(phase_dict["central"])[mask],
         bins=bins,
         histtype="stepfilled",
         color="orange",
@@ -533,7 +538,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         phase_dict["lr"], bins=bins, histtype="stepfilled", color="dodgerblue"
     )
     axarr[1][2].hist(
-        np.array(phase_dict["lr"])[~mask],
+        np.array(phase_dict["lr"])[mask],
         bins=bins,
         histtype="stepfilled",
         color="orange",

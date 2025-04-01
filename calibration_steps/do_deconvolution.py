@@ -60,20 +60,15 @@ def find_max_loc(im, do_median=False):
         temp_im = median_filter(im, 3)
     idx = np.argmax(np.abs(temp_im))
     # idx  = np.argmax(im )
-    x, y = np.unravel_index(idx, im.shape)
+    y, x = np.unravel_index(idx, im.shape)
     # x, y = argmax2d(np.abs(temp_im))
-
-    return x, y
-
-
-# unit test for find_max_loc
-# print(find_max_loc(psf_estimate))
+    return y, x
 
 
 def imshift(im, y, x):
     # roll the im along each axis so that peak is at x,y
-    wx = im.shape[0] // 2
-    wy = im.shape[1] // 2
+    wx = im.shape[1] // 2
+    wy = im.shape[0] // 2
     temp_im = np.roll(im, wx - x, axis=1)
     return np.roll(temp_im, wy - y, axis=0)
 
@@ -125,7 +120,7 @@ def fit_gauss(psf_est, level=0.0):
     x0 = [5, 5, 0]
     # TODO: clip the psf_est
     res = least_squares(fit_func, x0, args=([data]))
-    yv, xv = np.meshgrid(
+    xv, yv = np.meshgrid(
         np.arange(-psf_est.shape[1] // 2, psf_est.shape[1] // 2),
         np.arange(-psf_est.shape[0] // 2, psf_est.shape[0] // 2),
     )
@@ -133,7 +128,7 @@ def fit_gauss(psf_est, level=0.0):
         xv,
         yv,
         0,
-        -1,
+        0,
         res.x[0] / (2 * np.sqrt(2 * np.log(2))),
         res.x[1] / (2 * np.sqrt(2 * np.log(2))),
         res.x[2],
@@ -175,8 +170,8 @@ def do_clean(
 
     beam = np.copy(psf_estimate)
     beam /= np.max(beam)  # renormalize the psf estimate
-    beam[50, 50] += phat
-    beam /= np.max(beam)  # renormalize the psf estimate
+    beam[beam.shape[0] // 2, beam.shape[1] // 2] += phat
+    beam /= np.sum(beam)  # renormalize the psf estimate
 
     iterations = []
     delta = np.inf
@@ -188,24 +183,26 @@ def do_clean(
     else:
         threshold = -1
     while k < n_iter:  # and delta > 1e-8:
-        pk_x, pk_y = find_max_loc(im_i)
-        if abs(im_i[pk_x, pk_y]) < threshold:
+        pk_y, pk_x = find_max_loc(im_i)
+
+        if abs(im_i[pk_y, pk_x]) < threshold:
             reason = f"threshold ({k} iter)"
             break
         shifted_beam = np.copy(beam)
         shifted_beam = imshift(
-            shifted_beam, -pk_x, -pk_y
+            shifted_beam, -pk_y, -pk_x
         )  # move the psf to the "peak" location
 
         # scale shifted beam to flux * gain
-        shifted_beam *= im_i[pk_x, pk_y] * gain
+        shifted_beam *= im_i[pk_y, pk_x] * gain
 
         new_im = im_i - shifted_beam
-        delta = im_i[pk_x, pk_y] * gain  # np.sum(shifted_beam) #maybe?
-        resulting_im[pk_x, pk_y] += (
+        delta = im_i[pk_y, pk_x] * gain  # np.sum(shifted_beam) #maybe?
+        resulting_im[pk_y, pk_x] += (
             delta  # im_i[pk_x, pk_y] #* gain #np.max([im_i[pk_x, pk_y] * gain ,0])
         )
         # iterations.append([new_im, np.copy(resulting_im), delta]) #keep track of how things evolve
+        assert np.abs(im_i[pk_y, pk_x]) == np.max(np.abs(im_i)), "what???"
         if negstop:
             if delta < 0:
                 break
@@ -236,12 +233,12 @@ def _plot_beamsize(
     Plots the FWHM of the psf calibration in comparison to the supplied ellipse parameters
     """
     fig1 = plt.figure()
-    yv, xv = np.meshgrid(
+    xv, yv = np.meshgrid(
         np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
     )
 
     # TODO: fit a gaussian
-    fitted_gauss, psf_model = fit_gauss(psf_estimate, level=0.0)
+    fitted_gauss, psf_model = fit_gauss(psf_estimate, level=0.25)
     # psf_model = imshift(psf_model, *find_max_loc(psf_model))
     print(fitted_gauss, "test")
 
@@ -294,7 +291,7 @@ def _plot_beamsize(
     else:
         plt.close()
 
-    yv, xv = np.meshgrid(
+    xv, yv = np.meshgrid(
         np.arange(-psf_estimate.shape[1] // 2, psf_estimate.shape[1] // 2),
         np.arange(-psf_estimate.shape[0] // 2, psf_estimate.shape[0] // 2),
     )
@@ -340,7 +337,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
         threshold = None
 
     while True:
-        my_gauss = _plot_beamsize(
+        fitted_gauss = _plot_beamsize(
             psf_estimate,
             minor,
             major,
@@ -585,7 +582,7 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
         )
 
         fig3, ax3 = plt.subplots()
-        g = np.copy(my_gauss)
+        g = np.copy(mygauss)
         g /= np.max(g)
         g *= np.max(convim)
         cbar1 = ax3.imshow(
@@ -791,6 +788,31 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target):
     return deconvolved_RL
 
 
+def clean_test(debug=False):
+    # 1. Make a fake dirty image with one point at x,y
+    s = 10
+    dirty_im = np.zeros((s, s))
+    y, x = np.random.randint(0, s, 2)
+    dirty_im[y, x] = 1
+    # 2. Find the max val and assert they are the same
+    max_y, max_x = find_max_loc(dirty_im, False)
+    assert x == max_x and y == max_y, f"Expected {x,y}, got {max_x, max_y}"
+    # 3. Shift a mock psf to that location
+    psf = np.zeros((s, s))
+    psf[psf.shape[0] // 2, psf.shape[1] // 2] = 1
+    temp = imshift(psf, -max_y, -max_x)
+    py, px = find_max_loc(temp, False)
+    if debug:
+        fig, (ax, bx) = plt.subplots(1, 2)
+        ax.imshow(dirty_im, origin="lower")
+        bx.imshow(temp, origin="lower")
+        plt.show()
+    # 4. assert that the max location of the psf is at the original location
+    assert px == x and py == y, f"Expected {x,y}, got {px,py}"
+
+    return 1
+
+
 def do_deconvolution(
     configdata: dict,
     target_configdata: dict,
@@ -817,18 +839,12 @@ def do_deconvolution(
             f"{targ_output_dir}/intermediate/corotate/{targname}_corotated_stacked_im.npy"
         )
         dirty_im -= np.min(dirty_im)
-        dirty_im -= np.mean(dirty_im[:15, :15])  # TODO: remove background???
-
-        try:
-            if target_configdata["mode"] == "singledish":
-                dirty_im = median_filter(dirty_im, 3)
-                # TODO: also do this for Fizeau???
-        except KeyError:
-            # Fizeau mode, the default
-            pass
+        dirty_im -= np.mean(
+            dirty_im[: dirty_im.shape[0] // 4, : dirty_im.shape[1] // 4]
+        )  # TODO: remove background???
 
         dirty_im = imshift(
-            dirty_im, *find_max_loc(dirty_im, do_median=False)
+            dirty_im, *find_max_loc(dirty_im, do_median=True)
         )  # recenter
 
         # Load the psf image
@@ -843,14 +859,6 @@ def do_deconvolution(
         psf_estimate = imshift(
             psf_estimate, *find_max_loc(psf_estimate, do_median=True)
         )  # recenter
-
-        try:
-            if calib_configdata["mode"] == "singledish":
-                psf_estimate = median_filter(psf_estimate, 3)
-                # TODO: also do this for Fizeau???
-        except KeyError:
-            # Fizeau mode, the default
-            pass
 
         if target_configdata["instrument"] != "NOMIC":
             global PIXEL_SCALE

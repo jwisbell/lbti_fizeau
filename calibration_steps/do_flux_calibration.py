@@ -19,6 +19,7 @@ logger = Logger("./")
 
 def _load_images_and_compute_stats(path_dict: dict, skips: list = []):
     all_kept_sums = []
+    # TODO: modify to give per-pixel uncertainty????
     for key, path in path_dict.items():
         print(key, path)
         if key in skips:

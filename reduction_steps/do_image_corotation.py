@@ -150,7 +150,7 @@ def _process_rotations(
         temp_rotarr = []
         temp_unrotarr = []
         for i, cim in enumerate(cims):
-            if mask[i]:
+            if mask[i] == 1:
                 # shift to center
                 new_im = np.roll(cim, w - centroid_positions[f"{key}"][0], axis=1)
                 new_im = np.roll(new_im, w - centroid_positions[f"{key}"][1], axis=0)
@@ -224,7 +224,6 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
 
     infos = {}
     for i_f in info_files:
-        print(i_f)
         try:
             with open(i_f, "rb") as handle:
                 info = pickle.load(handle)
