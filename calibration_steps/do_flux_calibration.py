@@ -19,7 +19,9 @@ logger = Logger("./")
 
 def _load_images_and_compute_stats(path_dict: dict, skips: list = []):
     all_kept_sums = []
+    # TODO: modify to give per-pixel uncertainty????
     for key, path in path_dict.items():
+        print(key, path)
         if key in skips:
             continue
         with open(
@@ -36,7 +38,9 @@ def _load_images_and_compute_stats(path_dict: dict, skips: list = []):
             kept_ims = np.array([x - np.mean(x[:20, :20]) for x in kept_ims])
             kept_ims = np.array([x - np.min(x) for x in kept_ims])
 
-            all_kept_sums.append([np.sum(x) for x in kept_ims])
+            # all_kept_sums.append([np.sum(x) for x in kept_ims])
+            for ki in kept_ims:
+                all_kept_sums.append(np.sum(ki))
     all_kept_sums = np.array(all_kept_sums).flatten()
     return {
         "mean": np.mean(all_kept_sums),
@@ -100,6 +104,12 @@ def do_flux_calibration(
         return False
 
     # 1. Load the flux calibrator images and compute percentiles of the sum
+    temp = glob(
+        f"{calib_output_dir}/intermediate/frame_selection/{calib_name}*info*.pk"
+    )
+    calib_files = {(f.split(".pk")[0].split("_")[-1])[5:]: f for f in temp}
+
+    """
     num_files_calib = len(
         glob(f"{calib_output_dir}/intermediate/frame_selection/{calib_name}*info*.pk")
     )
@@ -108,6 +118,7 @@ def do_flux_calibration(
         f"{i+1}": f"{calib_output_dir}/intermediate/frame_selection/{calib_name}_fs_info_cycle{i+1}.pk"
         for i in range(num_files_calib)
     }
+    """
     logger.info(PROCESS_NAME, f"Loading the calibrator ({calib_name}) files...")
     try:
         calib_stats = _load_images_and_compute_stats(calib_files, calib_skips)
@@ -122,7 +133,7 @@ def do_flux_calibration(
         return False
 
     # 2. Load the science target images and compute percentiles of the sum
-    num_files_target = len(
+    """num_files_target = len(
         glob(f"{target_output_dir}/intermediate/frame_selection/{target_name}*info*.pk")
     )
 
@@ -130,6 +141,13 @@ def do_flux_calibration(
         f"{i+1}": f"{target_output_dir}/intermediate/frame_selection/{target_name}_fs_info_cycle{i+1}.pk"
         for i in range(num_files_target)
     }
+    """
+
+    temp = glob(
+        f"{target_output_dir}/intermediate/frame_selection/{target_name}*info*.pk"
+    )
+    target_files = {(f.split(".pk")[0].split("_")[-1])[5:]: f for f in temp}
+    print(target_files)
 
     logger.info(PROCESS_NAME, f"Loading the target ({target_name}) files...")
     try:

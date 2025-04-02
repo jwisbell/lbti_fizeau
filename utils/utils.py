@@ -13,7 +13,7 @@ def argmax2d(arr):
     # wrapper for numpy argmax to give x,y coordinates of the max in a 2d array
     m = np.nanmax(arr)
     s = np.where(arr == m)
-    return s[1], s[0]
+    return s[1][0], s[0][0]
 
 
 def angle_mean(arr):

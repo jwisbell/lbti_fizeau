@@ -11,9 +11,9 @@ As of 21 October 2024, compatible with latest version of each.
 - Astropy
 - Scipy
 - pandas
-- glob
 - numpy
 - matplotlib
+- scikit-image
 
 ### Disk Space
 
@@ -127,5 +127,6 @@ For each target-calibrator pair a new config file must be specified. See `templa
 The final product of these procedures is a flux calibrated image with the equivalent resolution of a 23 meter telescope. An example is shown in the below figure. The images and their uncertainties/accompanying data are saved as \*.npy binary files or as pickled objects for ease of use.
 
 ### Example image (WORK IN PROGRESS, Copyright J. Isbell)
+
 ![Example image (WORK IN PROGRESS, Copyright J. Isbell)](example_images/NGC4151_clean_deconvolution.png)
-The top left panel is the final science image. The top right panel shows the processed observations before deconvolution. The top center panel shows the final science image at the same resolution as the intial images, for comparison. The bottom left panel is the so-called residual map, which shows the difference between the initial and final images after CLEANING. The bottom right panel shows the PSF used for deconvolution. 
+The top left panel is the final science image. The top right panel shows the processed observations before deconvolution. The top center panel shows the final science image at the same resolution as the intial images, for comparison. The bottom left panel is the so-called residual map, which shows the difference between the initial and final images after CLEANING. The bottom right panel shows the PSF used for deconvolution.

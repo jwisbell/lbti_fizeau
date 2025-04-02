@@ -9,7 +9,7 @@ Contains the class which handles logging. To be loaded by whichever process call
 
 from datetime import datetime
 
-pipelinename = "OCATILLO"
+pipelinename = "LIZARD"
 
 
 class Logger:
