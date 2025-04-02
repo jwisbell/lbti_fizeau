@@ -16,6 +16,14 @@ def argmax2d(arr):
     return s[1][0], s[0][0]
 
 
+def imshift(im, y, x):
+    # roll the im along each axis so that peak is at x,y
+    wx = im.shape[1] // 2
+    wy = im.shape[0] // 2
+    temp_im = np.roll(im, wx - x, axis=1)
+    return np.roll(temp_im, wy - y, axis=0)
+
+
 def angle_mean(arr):
     # take the mean of the angles, using complex numbers to account for wrapping
     vals = np.exp(1j * np.radians(arr))

@@ -21,7 +21,8 @@ from scipy.optimize import least_squares
 import pickle
 
 from utils.util_logger import Logger
-from utils.utils import argmax2d, gauss
+from utils.utils import argmax2d, gauss, imshift
+from calibration_steps.bad_pixel_correction import identify_bad_pixels as bp_corr
 
 PROCESS_NAME = "deconvolution"
 is_flux_cal = False
@@ -63,14 +64,6 @@ def find_max_loc(im, do_median=False):
     y, x = np.unravel_index(idx, im.shape)
     # x, y = argmax2d(np.abs(temp_im))
     return y, x
-
-
-def imshift(im, y, x):
-    # roll the im along each axis so that peak is at x,y
-    wx = im.shape[1] // 2
-    wy = im.shape[0] // 2
-    temp_im = np.roll(im, wx - x, axis=1)
-    return np.roll(temp_im, wy - y, axis=0)
 
 
 def do_convolution(im, psf):
@@ -118,7 +111,6 @@ def fit_gauss(psf_est, level=0.0):
     data[data < 0] = 0
 
     x0 = [5, 5, 0]
-    # TODO: clip the psf_est
     res = least_squares(fit_func, x0, args=([data]))
     xv, yv = np.meshgrid(
         np.arange(-psf_est.shape[1] // 2, psf_est.shape[1] // 2),
@@ -237,7 +229,6 @@ def _plot_beamsize(
         np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
     )
 
-    # TODO: fit a gaussian
     fitted_gauss, psf_model = fit_gauss(psf_estimate, level=0.25)
     # psf_model = imshift(psf_model, *find_max_loc(psf_model))
     print(fitted_gauss, "test")
@@ -833,6 +824,13 @@ def do_deconvolution(
         targ_output_dir = target_configdata["output_dir"]
         targname = target_configdata["target"]
         obsdate = target_configdata["obsdate"]
+        output_dir = configdata["output_dir"]
+
+        try:
+            do_bpm = bool(configdata["estimate_bad_pixels"])
+        except KeyError:
+            logger.warn(PROCESS_NAME, "`estimate_bad_pixels` not set, assuming False")
+            do_bpm = False
 
         # Load the dirty image
         dirty_im = np.load(
@@ -841,14 +839,15 @@ def do_deconvolution(
         dirty_im -= np.min(dirty_im)
         dirty_im -= np.mean(
             dirty_im[: dirty_im.shape[0] // 4, : dirty_im.shape[1] // 4]
-        )  # TODO: remove background???
+        )
 
         dirty_im = imshift(
             dirty_im, *find_max_loc(dirty_im, do_median=True)
         )  # recenter
+        if do_bpm:
+            dirty_im, _ = bp_corr(dirty_im)
 
         # Load the psf image
-        output_dir = configdata["output_dir"]
         calibname = calib_configdata["target"]
         psf_estimate = np.load(
             f"{output_dir}/calibrated/estimate_final_psf/{calibname}_for_{targname}_{obsdate}.npy"
@@ -859,6 +858,8 @@ def do_deconvolution(
         psf_estimate = imshift(
             psf_estimate, *find_max_loc(psf_estimate, do_median=True)
         )  # recenter
+        if do_bpm:
+            psf_estimate, _ = bp_corr(psf_estimate)
 
         if target_configdata["instrument"] != "NOMIC":
             global PIXEL_SCALE
