@@ -54,6 +54,11 @@ def _mk_emperical_psf(
     logger.info(
         PROCESS_NAME, f"The [first, last] rotations are {rotations[0], rotations[-1]}"
     )
+    logger.info(
+        PROCESS_NAME,
+        f"The [min, max] rotations are {np.min(rotations), np.max(rotations)}",
+    )
+    logger.info(PROCESS_NAME, f"All rotations are {rotations}")
 
     psf_estimate = np.mean(rotated_psfs, 0)
     # psf_estimate /= np.max(psf_estimate)
