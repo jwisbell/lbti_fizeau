@@ -21,7 +21,7 @@ from scipy.optimize import least_squares
 import pickle
 
 from utils.util_logger import Logger
-from utils.utils import argmax2d, gauss, imshift
+from utils.utils import argmax2d, gauss, imshift, find_max_loc, write_to_fits
 from calibration_steps.bad_pixel_correction import identify_bad_pixels as bp_corr
 
 PROCESS_NAME = "deconvolution"
@@ -50,20 +50,6 @@ mpl.rcParams["xtick.direction"] = "in"
 mpl.rcParams["xtick.top"] = True
 mpl.rcParams["ytick.direction"] = "in"
 mpl.rcParams["ytick.right"] = True
-
-
-def find_max_loc(im, do_median=False):
-    # find the x,y coords of peak of 2d array
-    # w = im.shape[0]
-    # temp_im = np.copy(im)[w//2-w//4:w//2+w//4,w//2-w//4:w//2+w//4]
-    temp_im = np.copy(im)
-    if do_median:
-        temp_im = median_filter(im, 3)
-    idx = np.argmax(np.abs(temp_im))
-    # idx  = np.argmax(im )
-    y, x = np.unravel_index(idx, im.shape)
-    # x, y = argmax2d(np.abs(temp_im))
-    return y, x
 
 
 def do_convolution(im, psf):
@@ -907,16 +893,27 @@ def do_deconvolution(
         is_flux_cal = True
         dirty_im /= np.sum(dirty_im)
         dirty_im *= flux_percentiles[1] * 1000
+        # dirty_im_errs = np.array(
+        #     [flux_percentiles[-2] * dirty_im, flux_percentiles[-1] * dirty_im]
+        # )
         logger.info(PROCESS_NAME, "Flux calibration successfully loaded!")
         np.save(
             f"{output_dir}/calibrated/flux_calibration/sci_{targname}_with_cal_{calibname}_flux_calibrated_im.npy",
             dirty_im,
         )
 
+        write_to_fits(
+            dirty_im,
+            f"{output_dir}/calibrated/flux_calibration/sci_{targname}_with_cal_{calibname}_flux_calibrated.fits",
+        )
+
+        relerrs = [flux_percentiles[-2], flux_percentiles[-1]]
+
     except FileNotFoundError:
         # flux files not present
         is_flux_cal = False
         logger.warn(PROCESS_NAME, "Proceeding without proper flux calibration")
+        relerrs = [0, 0]
 
     clean_restored, clean_residual, clean_pt_src = wrap_clean(
         dirty_im,
@@ -940,6 +937,7 @@ def do_deconvolution(
         "clean_pt_src": clean_pt_src,
         "dirty_im": dirty_im,
         "rl": deconvolved_RL,
+        "relative_flux_errs": relerrs,
     }
     res = "matched"
     with open(

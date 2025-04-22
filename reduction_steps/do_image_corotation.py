@@ -149,6 +149,7 @@ def _process_rotations(
         temp_imarr = []
         temp_rotarr = []
         temp_unrotarr = []
+
         for i, cim in enumerate(cims):
             if mask[i] == 1:
                 # shift to center
@@ -258,6 +259,7 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     sum_unrotated = 0
     sum_std = 0
     count = 0
+    all_rotated = []
     for _, entry in rotation_dict.items():
         # for some reason these need to be recentered again
         centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
@@ -268,9 +270,23 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
             np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
         )
         count += len(entry["ims"])
+        for im in entry["ims"]:
+            all_rotated.append(im)
     mean_rotated = sum_rotated / count
     mean_unrotated = sum_unrotated / count
     mean_std = sum_std / count
+
+    # Stats for flux calibration
+    temp = np.array([x - np.mean(x[:10, :10]) for x in all_rotated])
+
+    test = np.percentile(temp, [50 - 34, 50, 50 + 34], axis=0)
+    fig, (ax, bx, cx) = plt.subplots(1, 3)
+    ax.imshow(np.mean(test), origin="lower")
+    bx.imshow(np.mean([test[1] - test[0], test[2] - test[1]], 0), origin="lower")
+    cx.hist(np.array(temp)[:, 50, 50])
+    cx.hist(np.array(temp)[:, 10, 10])
+    plt.show()
+    plt.close()
 
     psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
     stacked_rotated_im, _, _ = recenter(mean_rotated)
@@ -387,6 +403,7 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     sum_unrotated = 0
     sum_std = 0
     count = 0
+    all_rotated = []
     for _, entry in rotation_dict.items():
         # for some reason these need to be recentered again
         centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
@@ -397,9 +414,19 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
             np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
         )
         count += len(entry["ims"])
+        for im in entry["ims"]:
+            all_rotated.append(im)
     mean_rotated = sum_rotated / count
     mean_unrotated = sum_unrotated / count
     mean_std = sum_std / count
+
+    # Stats for flux calibration
+    mean_flux, test_std = np.mean(all_rotated, 0), np.std(all_rotated, 0)
+    fig, (ax, bx) = plt.subplots(1, 2)
+    ax.imshow(mean_flux, origin="lower")
+    bx.imshow(test_std, origin="lower")
+    plt.show()
+    plt.close()
 
     psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
     stacked_rotated_im = mean_rotated

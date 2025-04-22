@@ -573,7 +573,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
 
     plt.tight_layout()
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_nod{nod}_phasedist.png")
-
+    plt.close("all")
     return phase_dict, vis_dict
 
 
