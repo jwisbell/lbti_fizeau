@@ -13,19 +13,15 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 
 from utils.util_logger import Logger
-from reduction_steps.do_image_corotation import load_bkg_subtracted_files
 
 
 PROCESS_NAME = "flux_calibration"
 logger = Logger("./")
 
 
-def _load_images_and_compute_stats(
-    path_dict: dict, skips: list, bkg_subtracted_frames: list
-):
+def _load_images_and_compute_stats(path_dict: dict, skips: list):
     all_kept_sums = []
     all_kept_peaks = []
-    # TODO: modify to give per-pixel uncertainty????
     for key, path in path_dict.items():
         print(key, path)
         if key in skips:
@@ -35,26 +31,15 @@ def _load_images_and_compute_stats(
             "rb",
         ) as handle:
             info = pickle.load(handle)
-            # images = bkg_subtracted_frames[key]
 
             mask = info["mask"]
             cims = info["corrected_ims"]
-            # full_ims = images[mask]
 
             kept_ims = cims[mask]
 
             kept_ims = np.array([x - np.mean(x[:5, :5]) for x in kept_ims])
             kept_ims = np.array([x - np.min(x) for x in kept_ims])
 
-            # fig = plt.figure()
-            # plt.imshow(np.mean(kept_ims, 0), origin="lower")
-            #
-            # fig2 = plt.figure()
-            # plt.imshow(np.std(kept_ims, 0), origin="lower")
-            # plt.show()
-            # plt.close("all")
-
-            # all_kept_sums.append([np.sum(x) for x in kept_ims])
             for ki in kept_ims:
                 all_kept_sums.append(np.sum(ki))
                 all_kept_peaks.append(np.max(ki))
@@ -146,17 +131,9 @@ def do_flux_calibration(
     )
     calib_files = {(f.split(".pk")[0].split("_")[-1])[5:]: f for f in temp}
 
-    calib_background_subtracted_frames, centroid_positions, all_rotations = (
-        load_bkg_subtracted_files(
-            calib_nod_info, output_dir, calib_name, skips=calib_skips
-        )
-    )
-
     logger.info(PROCESS_NAME, f"Loading the calibrator ({calib_name}) files...")
     try:
-        calib_stats = _load_images_and_compute_stats(
-            calib_files, calib_skips, calib_background_subtracted_frames
-        )
+        calib_stats = _load_images_and_compute_stats(calib_files, calib_skips)
     except FileNotFoundError as e:
         logger.error(
             PROCESS_NAME,
@@ -174,17 +151,9 @@ def do_flux_calibration(
     target_files = {(f.split(".pk")[0].split("_")[-1])[5:]: f for f in temp}
     print(target_files)
 
-    target_background_subtracted_frames, centroid_positions, all_rotations = (
-        load_bkg_subtracted_files(
-            target_nod_info, output_dir, target_name, skips=target_skips
-        )
-    )
-
     logger.info(PROCESS_NAME, f"Loading the target ({target_name}) files...")
     try:
-        target_stats = _load_images_and_compute_stats(
-            target_files, target_skips, target_background_subtracted_frames
-        )
+        target_stats = _load_images_and_compute_stats(target_files, target_skips)
     except FileNotFoundError as e:
         logger.error(
             PROCESS_NAME,
