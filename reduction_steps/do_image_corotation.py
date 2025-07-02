@@ -6,6 +6,7 @@ Functions to align all images of an observation such that north is up and that t
 Called by lizard_reduce
 """
 
+from calibration_steps import bad_pixel_correction
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm
@@ -126,6 +127,7 @@ def _process_rotations(
     centroid_positions: dict,
     all_rotations: dict,
     extraction_size: int,
+    use_phase: bool = False,
 ):
     """
     Docstring
@@ -142,6 +144,8 @@ def _process_rotations(
         rotations = all_rotations[f"{key}"]
         # cc_vals = info["correlation_vals"]
         mask = info["mask"]
+        if use_phase:
+            mask = info["fourier"]["mask"]
         shiftsx = info["shiftsx"]
         shiftsy = info["shiftsy"]
         proper_rotations[f"{key}"] = {"ims": [], "rots": []}
@@ -149,6 +153,7 @@ def _process_rotations(
         temp_imarr = []
         temp_rotarr = []
         temp_unrotarr = []
+
         for i, cim in enumerate(cims):
             if mask[i] == 1:
                 # shift to center
@@ -208,6 +213,19 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
         logger.error(PROCESS_NAME, f"Key missing from config: {e}")
         return False
 
+    try:
+        use_phase = config["use_phase"]
+    except KeyError:
+        use_phase = False
+
+    try:
+        remove_bad_pixels = config["estimate_bad_pixels"]
+    except KeyError:
+        remove_bad_pixels = False
+        logger.warn(
+            PROCESS_NAME, "Bad pixel correction not set, assuming no correction."
+        )
+
     # 1. Load the data
     # 1a - load the background subtracted frames
     background_subtracted_frames, centroid_positions, all_rotations = (
@@ -246,6 +264,7 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
         centroid_positions,
         all_rotations,
         extraction_size,
+        use_phase=use_phase,
     )
     # print(len(properly_rotated_ims), len(properly_rotated_ims) / 58)
     # _ = input("continue?")
@@ -258,19 +277,39 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     sum_unrotated = 0
     sum_std = 0
     count = 0
+    all_rotated = []
     for _, entry in rotation_dict.items():
         # for some reason these need to be recentered again
         centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
         centered_unrot, x, y = recenter(np.sum(entry["centered_unrot"], 0))
+
+        if remove_bad_pixels:
+            centered_rot, _ = bad_pixel_correction.identify_bad_pixels(centered_rot)
+            centered_unrot, _ = bad_pixel_correction.identify_bad_pixels(centered_unrot)
+
         sum_rotated += centered_rot
         sum_unrotated += centered_unrot
         sum_std += np.roll(
             np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
         )
         count += len(entry["ims"])
+        for im in entry["ims"]:
+            all_rotated.append(im)
     mean_rotated = sum_rotated / count
     mean_unrotated = sum_unrotated / count
     mean_std = sum_std / count
+
+    # Stats for flux calibration
+    temp = np.array([x - np.mean(x[:10, :10]) for x in all_rotated])
+
+    # test = np.percentile(temp, [50 - 34, 50, 50 + 34], axis=0)
+    # fig, (ax, bx, cx) = plt.subplots(1, 3)
+    # ax.imshow(np.mean(test), origin="lower")
+    # bx.imshow(np.mean([test[1] - test[0], test[2] - test[1]], 0), origin="lower")
+    # cx.hist(np.array(temp)[:, 50, 50])
+    # cx.hist(np.array(temp)[:, 10, 10])
+    # plt.show()
+    # plt.close()
 
     psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
     stacked_rotated_im, _, _ = recenter(mean_rotated)
@@ -310,6 +349,25 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
         "wb",
     ) as pkl:
         pickle.dump(unrotated_per_nod, pkl, protocol=pickle.HIGHEST_PROTOCOL)
+
+    rotated_per_nod = {
+        nod: np.mean(rotation_dict[nod]["ims"], 0) for nod in rotation_dict
+    }
+    with open(
+        f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_rotated_cycle_stacks.pkl",
+        "wb",
+    ) as pkl:
+        pickle.dump(rotated_per_nod, pkl, protocol=pickle.HIGHEST_PROTOCOL)
+
+    rotations_per_nod = {
+        nod: np.mean(rotation_dict[nod]["rots"]) for nod in rotation_dict
+    }
+
+    with open(
+        f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_rotations_per_cycle.pkl",
+        "wb",
+    ) as pkl:
+        pickle.dump(rotations_per_nod, pkl, protocol=pickle.HIGHEST_PROTOCOL)
 
     np.save(
         f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_included_rotations.npy",
@@ -387,6 +445,7 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     sum_unrotated = 0
     sum_std = 0
     count = 0
+    all_rotated = []
     for _, entry in rotation_dict.items():
         # for some reason these need to be recentered again
         centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
@@ -397,9 +456,19 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
             np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
         )
         count += len(entry["ims"])
+        for im in entry["ims"]:
+            all_rotated.append(im)
     mean_rotated = sum_rotated / count
     mean_unrotated = sum_unrotated / count
     mean_std = sum_std / count
+
+    # Stats for flux calibration
+    mean_flux, test_std = np.mean(all_rotated, 0), np.std(all_rotated, 0)
+    fig, (ax, bx) = plt.subplots(1, 2)
+    ax.imshow(mean_flux, origin="lower")
+    bx.imshow(test_std, origin="lower")
+    plt.show()
+    plt.close()
 
     psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
     stacked_rotated_im = mean_rotated

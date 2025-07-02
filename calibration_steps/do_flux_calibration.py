@@ -9,6 +9,8 @@ Called by lizard_calibrate
 import numpy as np
 import pickle
 from glob import glob
+import matplotlib.pyplot as plt
+from matplotlib.colors import PowerNorm
 
 from utils.util_logger import Logger
 
@@ -17,9 +19,9 @@ PROCESS_NAME = "flux_calibration"
 logger = Logger("./")
 
 
-def _load_images_and_compute_stats(path_dict: dict, skips: list = []):
+def _load_images_and_compute_stats(path_dict: dict, skips: list):
     all_kept_sums = []
-    # TODO: modify to give per-pixel uncertainty????
+    all_kept_peaks = []
     for key, path in path_dict.items():
         print(key, path)
         if key in skips:
@@ -35,13 +37,32 @@ def _load_images_and_compute_stats(path_dict: dict, skips: list = []):
 
             kept_ims = cims[mask]
 
-            kept_ims = np.array([x - np.mean(x[:20, :20]) for x in kept_ims])
+            kept_ims = np.array([x - np.mean(x[:5, :5]) for x in kept_ims])
             kept_ims = np.array([x - np.min(x) for x in kept_ims])
 
-            # all_kept_sums.append([np.sum(x) for x in kept_ims])
             for ki in kept_ims:
                 all_kept_sums.append(np.sum(ki))
+                all_kept_peaks.append(np.max(ki))
+            # for fi in full_ims:
+            #     all_images.append(fi)
+
     all_kept_sums = np.array(all_kept_sums).flatten()
+    all_kept_peaks = np.array(all_kept_peaks).flatten()
+
+    logger.info(
+        PROCESS_NAME,
+        f"Using sums: {np.percentile(all_kept_sums, [50 - 34, 50, 50 + 34])}",
+    )
+    logger.info(
+        PROCESS_NAME,
+        f"Using peaks: {np.percentile(all_kept_peaks, [50 - 34, 50, 50 + 34])}",
+    )
+
+    logger.info(
+        PROCESS_NAME,
+        f"Relative errs: {np.std(all_kept_sums)/np.mean(all_kept_sums)} vs {np.std(all_kept_peaks)/np.mean(all_kept_peaks)}",
+    )
+
     return {
         "mean": np.mean(all_kept_sums),
         "percentiles": np.percentile(all_kept_sums, [50 - 34, 50, 50 + 34]),
@@ -53,15 +74,10 @@ def _compute_ratios(target_stats, calib_stats):
     """
     Docstring
     """
-    mean_ratio = target_stats["mean"] / calib_stats["mean"]
+    # mean_ratio = target_stats["mean"] / calib_stats["mean"]
     median_ratio = target_stats["percentiles"][1] / calib_stats["percentiles"][1]
     ratio_upperlim = target_stats["percentiles"][2] / calib_stats["percentiles"][0]
     ratio_lowerlim = target_stats["percentiles"][0] / calib_stats["percentiles"][2]
-
-    easy_relerr = np.sqrt(
-        np.square(target_stats["std"] / target_stats["mean"])
-        + np.square(calib_stats["std"] / calib_stats["mean"])
-    )
 
     uneven_relerr = [
         abs(median_ratio - ratio_lowerlim) / median_ratio,
@@ -69,6 +85,17 @@ def _compute_ratios(target_stats, calib_stats):
     ]
 
     return median_ratio, uneven_relerr
+
+
+def _make_plot(lower, median, upper):
+    fig, (ax, bx) = plt.subplots(1, 2)
+    cbar1 = ax.imshow(median, origin="lower", norm=PowerNorm(0.5, vmin=0))
+    std = np.mean([median - lower, upper - median], 0)
+    cbar2 = bx.imshow(std, origin="lower")
+    plt.colorbar(cbar1, ax=ax, scale=0.7, label="Flux [mJy/px]")
+    plt.colorbar(cbar2, ax=bx, scale=0.7, label="Error [mJy/px]")
+    plt.show()
+    plt.close()
 
 
 def do_flux_calibration(
@@ -91,11 +118,13 @@ def do_flux_calibration(
         calib_output_dir = calib_configdata["output_dir"]
         calib_name = calib_configdata["target"]
         calib_skips = calib_configdata["skips"]
+        calib_nod_info = calib_configdata["nod_info"]
 
         # science target properties
         target_output_dir = target_configdata["output_dir"]
         target_name = target_configdata["target"]
         target_skips = target_configdata["skips"]
+        target_nod_info = target_configdata["nod_info"]
     except KeyError as e:
         logger.error(
             PROCESS_NAME,
@@ -109,16 +138,6 @@ def do_flux_calibration(
     )
     calib_files = {(f.split(".pk")[0].split("_")[-1])[5:]: f for f in temp}
 
-    """
-    num_files_calib = len(
-        glob(f"{calib_output_dir}/intermediate/frame_selection/{calib_name}*info*.pk")
-    )
-
-    calib_files = {
-        f"{i+1}": f"{calib_output_dir}/intermediate/frame_selection/{calib_name}_fs_info_cycle{i+1}.pk"
-        for i in range(num_files_calib)
-    }
-    """
     logger.info(PROCESS_NAME, f"Loading the calibrator ({calib_name}) files...")
     try:
         calib_stats = _load_images_and_compute_stats(calib_files, calib_skips)
@@ -133,16 +152,6 @@ def do_flux_calibration(
         return False
 
     # 2. Load the science target images and compute percentiles of the sum
-    """num_files_target = len(
-        glob(f"{target_output_dir}/intermediate/frame_selection/{target_name}*info*.pk")
-    )
-
-    target_files = {
-        f"{i+1}": f"{target_output_dir}/intermediate/frame_selection/{target_name}_fs_info_cycle{i+1}.pk"
-        for i in range(num_files_target)
-    }
-    """
-
     temp = glob(
         f"{target_output_dir}/intermediate/frame_selection/{target_name}*info*.pk"
     )
@@ -177,7 +186,13 @@ def do_flux_calibration(
     final_flux = ratio * calib_flux
     final_flux_unc = calib_flux * final_relerr
     flux_range = np.array(
-        [final_flux - final_flux_unc[0], final_flux, final_flux + final_flux_unc[1]]
+        [
+            final_flux - final_flux_unc[0],
+            final_flux,
+            final_flux + final_flux_unc[1],
+            final_relerr[0],
+            final_relerr[1],
+        ]
     )
 
     logger.info(

@@ -14,6 +14,7 @@ import numpy as np
 from matplotlib import animation
 from matplotlib.colors import PowerNorm
 from scipy.ndimage import median_filter
+from datetime import datetime
 from utils.util_logger import Logger
 
 
@@ -51,13 +52,39 @@ def _extract_window(im, center):
     return im[ylower:yupper, xlower:xupper]
 
 
-def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
+def time_convert(date_string, time_string):
+    year, month, day = date_string.split("-")
+    hour, minute, second = time_string.split(":")
+    try:
+        return datetime_to_julian_date(
+            int(year), int(month), int(day), int(hour), int(minute), int(float(second))
+        )
+    except ValueError:
+        print("could not convert ", date_string, time_string)
+
+
+def datetime_to_julian_date(year, month, day, hour, minute, second):
+    """Converts a date and time to a Julian date."""
+    dt = datetime(year, month, day, hour, minute, second)
+    origin = datetime(1899, 12, 31, 12, 0, 0)
+    time_delta = dt - origin
+    return 2415020 + time_delta.total_seconds() / (24 * 60 * 60)
+
+
+def _load_fits_files(
+    fdir,
+    nods,
+    prefix,
+    skipkeys=[],
+    ramp_params: dict = {"idx": -1, "subtract_min": False},
+):
     # for each nod position open the files
     # extract a box of size `aperture size` nod position in each file
     # extract background aperture in each file
     images = {}
     pas = {}
     fnames = {}
+    timestamps = {}
     # TODO: can this be sped up using multiprocess?
     for name, entry in nods.items():
         if name in skipkeys:
@@ -65,6 +92,7 @@ def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
             continue
         temp = []
         temp_pas = []
+        obstime = []
         logger.info(PROCESS_NAME, f"Loading nod {name}")
         filenames = [
             f"{fdir}{prefix}{str(i).zfill(6)}.fits"
@@ -77,16 +105,20 @@ def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
                 with fits.open(filename) as x:
                     im = np.copy(x[0].data)
                     if len(x[0].data.shape) > 2:
-                        im = np.copy(x[0].data[-1])
+                        im = np.copy(x[0].data[ramp_params["idx"]])
                         if instrument != "NOMIC":
-                            im = np.copy(
-                                x[0].data[-2]
-                            )  # TODO: change back after 1068  # [-1])
-                        # im = np.array([x[0] for x in im])
+                            im = np.copy(x[0].data[ramp_params["idx"]])
+                            # subtracting out the "zero" exposure to remove bad pixels
+                            if ramp_params["subtract_min"]:
+                                im -= x[0].data[0]
+
                     temp.append(_extract_window(im, entry["position"]))
                     pa = float(x[0].header["LBT_PARA"])
                     temp_pas.append(pa)
-                    # return
+                    obstime.append(
+                        time_convert(x[0].header["date-obs"], x[0].header["time-obs"])
+                    )
+                    # returna
             except FileNotFoundError as e:
                 logger.warn(PROCESS_NAME, f"\t\t {filename} failed, {e}")
                 continue
@@ -96,9 +128,10 @@ def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
         images[name] = temp
         pas[name] = temp_pas  # angle_mean(temp_pas)
         fnames[name] = filenames
+        timestamps[name] = obstime
 
         logger.info(PROCESS_NAME, f"\t Done! Mean PA {np.mean(pas[name])}")
-    return images, pas, fnames
+    return images, pas, fnames, timestamps
 
 
 def _window_background_subtraction(im_arr, background, window_center):
@@ -129,7 +162,9 @@ def _image_video(img_list1, name):
     return anim
 
 
-def _qa_plots(bg_subtracted_frames, ims, centroid_positions, output_dir, target):
+def _qa_plots(
+    bg_subtracted_frames, ims, centroid_positions, timestamps, output_dir, target
+):
     # ## (optional) Plot cycles to quickly assess quality
     # HTML(image_video(bg_subtracted_frames["1"][::2],"2").to_html5_video())
     for key in bg_subtracted_frames.keys():
@@ -154,7 +189,11 @@ def _qa_plots(bg_subtracted_frames, ims, centroid_positions, output_dir, target)
     _ = plt.figure()
     plt.title("mean flux")
     for key in ims.keys():
-        plt.plot([np.nanmean(x) for x in bg_subtracted_frames[key]], label=key)
+        plt.plot(
+            [t for t in timestamps[key]],
+            [np.nanmean(x) for x in bg_subtracted_frames[key]],
+            label=key,
+        )
     plt.legend()
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_allnods_meanflux.png")
     plt.close("all")
@@ -182,6 +221,14 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
     output_dir = config["output_dir"]
     skips = [str(x) for x in config["skips"]]
     batch_size = config["batch_size"]
+    try:
+        ramp_params = config["ramp_params"]
+    except KeyError:
+        logger.warn(
+            PROCESS_NAME,
+            "No ramp params set, using default {idx:-1, subtract_min:False}",
+        )
+        ramp_params = {"idx": -1, "subtract_min": False}
 
     prefix = f"n_{obsdate}_"
     if instrument != "NOMIC":
@@ -205,8 +252,8 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             skips,
         )
 
-        ims, rotations, _ = _load_fits_files(
-            data_dir, nod_info, prefix, skipkeys=temp_skips
+        ims, rotations, _, timestamps = _load_fits_files(
+            data_dir, nod_info, prefix, skipkeys=temp_skips, ramp_params=ramp_params
         )
 
         # ## Do background subtraction and extract in a window
@@ -256,9 +303,20 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
                 f"{output_dir}/{process_path}/{target}_bkg-subtracted_cycle{key}.npy", x
             )  # save the background-subtracted frames
 
+            np.save(
+                f"{output_dir}/{process_path}/{target}_timestamps_cycle{key}.npy",
+                timestamps[key],
+            )  # save the time stamps of the background-subtracted frames
         # do the plotting
         try:
-            _qa_plots(bg_subtracted_frames, ims, centroid_positions, output_dir, target)
+            _qa_plots(
+                bg_subtracted_frames,
+                ims,
+                centroid_positions,
+                timestamps,
+                output_dir,
+                target,
+            )
         except Exception as e:
             logger.error(PROCESS_NAME, f"_qa_plots failed due to {e}")
             # return False

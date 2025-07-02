@@ -14,6 +14,7 @@ from matplotlib.colors import PowerNorm
 import pickle
 from scipy.ndimage import zoom
 from glob import glob
+from sklearn.cluster import KMeans
 from utils.utils import argmax2d, gauss
 from utils.util_logger import Logger
 
@@ -147,7 +148,7 @@ def _frame_selection_qa(my_psf, correlation_vals, other_info, nod):
 """
 
 
-def _frame_selection_qa_many(axarr, my_psf, correlation_vals, other_info, nod, xoffset):
+def _frame_selection_qa_many(axarr, my_psf, nod, xoffset):
     # examine how the xoffset effects the resulting selected frames and psf
     ax = axarr[1, 0]
     bx = axarr[0, 0]
@@ -241,6 +242,7 @@ def _frame_centering_and_selection(
     usepsf=None,
     do_offset=True,
     custom_window_size=32,
+    use_phase=False,
 ):
     """
     the window size can be set
@@ -401,11 +403,30 @@ def _frame_centering_and_selection(
 
         # plot the effects of shifting
 
-        _frame_selection_qa_many(
-            axarr, recovered_psf, correlation_vals, other_info, nod, x_offset
-        )
+        _frame_selection_qa_many(axarr, recovered_psf, nod, x_offset)
         if not do_offset:
             break
+
+    phase_info, vis_info, phase_mask = _calc_phase_info(
+        corrected_ims, output_dir, target, nod, mask, instrument
+    )
+    # TODO: update the mask to use the phase info?
+    im_subset_phase = np.array(shift_images(bg_subtracted_frames[nod], other_info))[
+        phase_mask
+    ]
+    recovered_psf_phase = np.mean(im_subset_phase, 0)
+
+    logger.info(
+        PROCESS_NAME,
+        f"Using cutoff fraction {cutoff_fraction} keeps {np.sum(mask)}/{len(mask)} frames",
+    )
+    logger.info(
+        PROCESS_NAME,
+        f"Using |fourier phase| <{np.pi/4:.2f} keeps {np.sum(phase_mask)}/{len(phase_mask)} frames",
+    )
+
+    if use_phase:
+        _frame_selection_qa_many(axarr, recovered_psf_phase, nod, x_offset)
 
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_nod{nod}_result.png")
     plt.close()
@@ -418,15 +439,15 @@ def _frame_centering_and_selection(
         recovered_psf = recovered_psfs[0]
         correlation_vals, corrected_ims, other_info = results[0]
 
-    phase_info, vis_info = _calc_phase_info(
-        corrected_ims, output_dir, target, nod, mask, instrument
-    )
-
     # save the information
     if do_save:
         np.save(
             f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_fs_imstack_cycle{nod}.npy",
             recovered_psf,
+        )
+        np.save(
+            f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_fs_imstack_cycle{nod}_phasesel.npy",
+            recovered_psf_phase,
         )
         logger.info(
             PROCESS_NAME,
@@ -443,6 +464,7 @@ def _frame_centering_and_selection(
             info_dict["fourier"] = {}
             info_dict["fourier"]["phase"] = phase_info
             info_dict["fourier"]["visibilities"] = vis_info
+            info_dict["fourier"]["mask"] = phase_mask
             pickle.dump(info_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     return recovered_psf, correlation_vals, corrected_ims, other_info
@@ -458,7 +480,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
     dummy_im = np.zeros((gridsize, gridsize))
     dummy_im[gridsize // 2, gridsize // 2] = 1
     first_order = np.fft.fftshift(np.fft.fft2(dummy_im))
-
+    phase_mask = []
     for cim in cims:
         fft_raw = np.fft.fft2(cim)
         ft = np.fft.fftshift(fft_raw)
@@ -475,7 +497,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
 
         ft /= first_order
 
-        phase = np.angle(ft, deg=False)[:, start:]  # in radians
+        phase = np.angle(ft, deg=False)[:, start:] * (1 * np.pi)  # in Wavelengths
 
         # now to extract the values properly
         xc = 3
@@ -498,6 +520,10 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
             phase[locs["left"][1], locs["left"][0]]
             - phase[locs["right"][1], locs["right"][0]]
         )
+
+    phase_cutoff = 1  # np.pi / 2
+    phase_mask = [abs(x) <= phase_cutoff for x in phase_dict["central"]]
+
     _, axarr = plt.subplots(2, 3)
     axarr[0][1].imshow(
         phase,
@@ -510,6 +536,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
     # axarr[0][1].axis("off")
     axarr[0][2].axis("off")
     bins = np.linspace(-3.15, 3.15, 25)
+    # bins = np.linspace(-2, 2, 25)
     axarr[1][0].hist(
         phase_dict["ud"], bins=bins, histtype="stepfilled", color="firebrick"
     )
@@ -520,7 +547,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         color="orange",
     )
     axarr[1][0].set_title("Tip")
-    axarr[1][0].set_xlabel(r"$\Delta$" + "Phase (top-bottom)\n[radians]")
+    axarr[1][0].set_xlabel(r"$\Delta$" + "Phase (top-bottom)\n[Wavelengths]")
     yh, _, _ = axarr[1][1].hist(
         phase_dict["central"], bins=bins, histtype="stepfilled", color="k"
     )
@@ -529,10 +556,19 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         bins=bins,
         histtype="stepfilled",
         color="orange",
+        alpha=0.5,
+    )
+    axarr[1][1].hist(
+        np.array(phase_dict["central"])[phase_mask],
+        bins=bins,
+        histtype="stepfilled",
+        color="green",
+        alpha=0.5,
     )
     axarr[1][1].plot([1, 1], [0, np.max(yh)], "k--")
     axarr[1][1].plot([-1, -1], [0, np.max(yh)], "k--")
-    axarr[1][1].set_xlabel("Fourier Phase\n[radians]")
+    # axarr[1][1].set_xlabel("Fourier Phase\n[radians]")
+    axarr[1][1].set_xlabel("OPD [Wavelengths]")
     axarr[1][1].set_title("Piston")
     axarr[1][2].hist(
         phase_dict["lr"], bins=bins, histtype="stepfilled", color="dodgerblue"
@@ -543,7 +579,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         histtype="stepfilled",
         color="orange",
     )
-    axarr[1][2].set_xlabel(r"$\Delta$" + "Phase (left-right)\n[radians]")
+    axarr[1][2].set_xlabel(r"$\Delta$" + "Phase (left-right)\n[Wavelengths]")
     axarr[1][2].set_title("Tilt")
 
     axarr[0][2].plot(
@@ -566,15 +602,19 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
     )
 
     axarr[0][0].hist(
-        vis_dict["central"], bins=20, histtype="stepfilled", color="firebrick"
+        vis_dict["central"],
+        bins=np.linspace(0, 1, 20),
+        histtype="stepfilled",
+        color="firebrick",
     )
     axarr[0][0].set_title("Visibility")
     axarr[0][0].set_xlabel("Visibility")
 
     plt.tight_layout()
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_nod{nod}_phasedist.png")
+    plt.close()
 
-    return phase_dict, vis_dict
+    return phase_dict, vis_dict, phase_mask
 
 
 def do_frame_selection(config: dict, mylogger: Logger) -> bool:

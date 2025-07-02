@@ -8,10 +8,12 @@ Produces the final images and plots to diagnose quality.
 Called by lizard_calibrate
 """
 
+from typing import Dict
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
+from reduction_steps.do_image_corotation import recenter
 from scipy.ndimage import rotate
 from scipy.ndimage import gaussian_filter, median_filter, shift
 from skimage import restoration
@@ -19,9 +21,12 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse
 from scipy.optimize import least_squares
 import pickle
+import json
+from astropy.io import fits
 
 from utils.util_logger import Logger
-from utils.utils import argmax2d, gauss
+from utils.utils import argmax2d, gauss, imshift, find_max_loc, write_to_fits
+from calibration_steps.bad_pixel_correction import identify_bad_pixels as bp_corr
 
 PROCESS_NAME = "deconvolution"
 is_flux_cal = False
@@ -51,28 +56,6 @@ mpl.rcParams["ytick.direction"] = "in"
 mpl.rcParams["ytick.right"] = True
 
 
-def find_max_loc(im, do_median=False):
-    # find the x,y coords of peak of 2d array
-    # w = im.shape[0]
-    # temp_im = np.copy(im)[w//2-w//4:w//2+w//4,w//2-w//4:w//2+w//4]
-    temp_im = np.copy(im)
-    if do_median:
-        temp_im = median_filter(im, 3)
-    idx = np.argmax(np.abs(temp_im))
-    # idx  = np.argmax(im )
-    y, x = np.unravel_index(idx, im.shape)
-    # x, y = argmax2d(np.abs(temp_im))
-    return y, x
-
-
-def imshift(im, y, x):
-    # roll the im along each axis so that peak is at x,y
-    wx = im.shape[1] // 2
-    wy = im.shape[0] // 2
-    temp_im = np.roll(im, wx - x, axis=1)
-    return np.roll(temp_im, wy - y, axis=0)
-
-
 def do_convolution(im, psf):
     fft_im = np.fft.fft2(im)
     fft_psf = np.fft.fft2(psf)
@@ -82,6 +65,29 @@ def do_convolution(im, psf):
 def derotate(frame, rot):
     new_frame = rotate(frame, rot, reshape=False)
     return new_frame
+
+
+def _write_fits_file(data, relerr, header_info, fname):
+    hdr = fits.Header()
+    for key, value in header_info.items():
+        if key in ["target_config", "calib_config", "output_dir"]:
+            continue
+        try:
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    hdr[k] = v
+            else:
+                hdr[key] = value
+        except ValueError:
+            continue
+
+    hdu = fits.PrimaryHDU(data=data, header=hdr)
+    hdu2 = fits.ImageHDU(data=np.mean(relerr, 0) * data, name="IMERRS")
+    hdul = fits.HDUList([hdu, hdu2])
+    hdul.writeto(
+        fname,
+        overwrite=True,
+    )
 
 
 def fit_func(params, y):
@@ -118,7 +124,6 @@ def fit_gauss(psf_est, level=0.0):
     data[data < 0] = 0
 
     x0 = [5, 5, 0]
-    # TODO: clip the psf_est
     res = least_squares(fit_func, x0, args=([data]))
     xv, yv = np.meshgrid(
         np.arange(-psf_est.shape[1] // 2, psf_est.shape[1] // 2),
@@ -150,6 +155,40 @@ def fit_gauss(psf_est, level=0.0):
         res.x[1] / (2 * np.sqrt(2 * np.log(2))),
         res.x[2],
     ], model
+
+
+def _do_psf_subtraction(targ_image, psf_image, configdata, targname, calibname):
+    # 1. first scale the psf to the target image flux
+    psf_scaled = (psf_image / np.nanmax(psf_image)) * np.nanmax(targ_image)
+
+    # 2. Recenter
+    xc, yc = find_max_loc(targ_image, do_median=True)
+    # psf_scaled = imshift(psf_scaled, yc, xc)
+
+    # 3. Do the subtraction
+    delta = targ_image - psf_scaled
+
+    # 4. plot
+    fig, ax = plt.subplots(figsize=(4.25, 4.0))
+    im = ax.imshow(delta, origin="lower", cmap="magma", norm=PowerNorm(0.5, vmin=0))
+    plt.colorbar(im, ax=ax, shrink=0.7, label="Flux [mJy/px]")
+    outdir = configdata["output_dir"]
+    plt.tight_layout()
+    plt.savefig(
+        f"{outdir}/plots/deconvolution/{targname}_{calibname}_psf_subtraction.png"
+    )
+    plt.close()
+    np.save(
+        f"{outdir}/calibrated/deconvolution/{targname}_{calibname}_psf_subtraction.npy",
+        delta,
+    )
+
+    hdu = fits.PrimaryHDU(data=delta)
+    hdul = fits.HDUList([hdu])
+    hdul.writeto(
+        f"{outdir}/calibrated/deconvolution/{targname}_{calibname}_psf_subtraction.fits",
+        overwrite=True,
+    )
 
 
 def do_clean(
@@ -237,7 +276,6 @@ def _plot_beamsize(
         np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
     )
 
-    # TODO: fit a gaussian
     fitted_gauss, psf_model = fit_gauss(psf_estimate, level=0.25)
     # psf_model = imshift(psf_model, *find_max_loc(psf_model))
     print(fitted_gauss, "test")
@@ -314,7 +352,9 @@ def _plot_beamsize(
     return model
 
 
-def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
+def wrap_clean(
+    dirty_im, psf_estimate, configdata, target, configfile: str, mode="interactive"
+):
     """
     Wraps the do_clean function, extracting the relevant parameters from the config files and plotting the results
     """
@@ -616,7 +656,24 @@ def wrap_clean(dirty_im, psf_estimate, configdata, target, mode="interactive"):
                 "Change clean parameters ('niter XX', 'gain XX', 'phat XX', 'continue XXX', 'reset', 'automatic XX'), 'help' or 'okay':\t"
             )
             if command == "okay":
-                # TODO: save the updated settings
+                do_save = input("Save your parameters? (y | n): ")
+                if do_save == "y" or do_save == "yes":
+                    with open(configfile) as cfg:
+                        old_configdata = json.load(cfg)
+                    new_configdata = {k: v for k, v in old_configdata.items()}
+                    new_configdata["clean_niter"] = n_iter
+                    new_configdata["clean_gain"] = gain
+                    new_configdata["clean_phat"] = phat
+                    new_configdata["clean_threshold"] = threshold
+                    new_configdata["clean_beam"] = {
+                        "major": major,
+                        "minor": minor,
+                        "rot": angle,
+                    }
+                    with open(configfile, "w") as file:
+                        json.dump(new_configdata, file, indent=4)
+                    logger.info(PROCESS_NAME, "New parameters saved!")
+
                 plt.close("all")
                 break
             if command == "help":
@@ -818,6 +875,7 @@ def do_deconvolution(
     target_configdata: dict,
     calib_configdata: dict,
     mylogger: Logger,
+    configfile: str,
     interactive=True,
 ) -> bool:
     """
@@ -833,6 +891,13 @@ def do_deconvolution(
         targ_output_dir = target_configdata["output_dir"]
         targname = target_configdata["target"]
         obsdate = target_configdata["obsdate"]
+        output_dir = configdata["output_dir"]
+
+        try:
+            do_bpm = bool(configdata["estimate_bad_pixels"])
+        except KeyError:
+            logger.warn(PROCESS_NAME, "`estimate_bad_pixels` not set, assuming False")
+            do_bpm = False
 
         # Load the dirty image
         dirty_im = np.load(
@@ -841,14 +906,15 @@ def do_deconvolution(
         dirty_im -= np.min(dirty_im)
         dirty_im -= np.mean(
             dirty_im[: dirty_im.shape[0] // 4, : dirty_im.shape[1] // 4]
-        )  # TODO: remove background???
+        )
 
         dirty_im = imshift(
             dirty_im, *find_max_loc(dirty_im, do_median=True)
         )  # recenter
+        if do_bpm:
+            dirty_im, _ = bp_corr(dirty_im)
 
         # Load the psf image
-        output_dir = configdata["output_dir"]
         calibname = calib_configdata["target"]
         psf_estimate = np.load(
             f"{output_dir}/calibrated/estimate_final_psf/{calibname}_for_{targname}_{obsdate}.npy"
@@ -859,6 +925,8 @@ def do_deconvolution(
         psf_estimate = imshift(
             psf_estimate, *find_max_loc(psf_estimate, do_median=True)
         )  # recenter
+        if do_bpm:
+            psf_estimate, _ = bp_corr(psf_estimate)
 
         if target_configdata["instrument"] != "NOMIC":
             global PIXEL_SCALE
@@ -906,22 +974,36 @@ def do_deconvolution(
         is_flux_cal = True
         dirty_im /= np.sum(dirty_im)
         dirty_im *= flux_percentiles[1] * 1000
+        # dirty_im_errs = np.array(
+        #     [flux_percentiles[-2] * dirty_im, flux_percentiles[-1] * dirty_im]
+        # )
         logger.info(PROCESS_NAME, "Flux calibration successfully loaded!")
         np.save(
             f"{output_dir}/calibrated/flux_calibration/sci_{targname}_with_cal_{calibname}_flux_calibrated_im.npy",
             dirty_im,
         )
 
+        write_to_fits(
+            dirty_im,
+            f"{output_dir}/calibrated/flux_calibration/sci_{targname}_with_cal_{calibname}_flux_calibrated.fits",
+        )
+
+        relerrs = [flux_percentiles[-2], flux_percentiles[-1]]
+
     except FileNotFoundError:
         # flux files not present
         is_flux_cal = False
         logger.warn(PROCESS_NAME, "Proceeding without proper flux calibration")
+        relerrs = [0, 0]
+
+    _do_psf_subtraction(dirty_im, psf_estimate, configdata, targname, calibname)
 
     clean_restored, clean_residual, clean_pt_src = wrap_clean(
         dirty_im,
         psf_estimate,
         configdata,
         targname,
+        configfile,
         mode="interactive",
     )
     if clean_restored is None:
@@ -939,6 +1021,7 @@ def do_deconvolution(
         "clean_pt_src": clean_pt_src,
         "dirty_im": dirty_im,
         "rl": deconvolved_RL,
+        "relative_flux_errs": relerrs,
     }
     res = "matched"
     with open(
@@ -946,5 +1029,20 @@ def do_deconvolution(
         "wb",
     ) as handle:
         pickle.dump(datadict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # save the images as fits files for sharing
+    _write_fits_file(
+        deconvolved_RL,
+        relerrs,
+        configdata,
+        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_rl.fits",
+    )
+
+    _write_fits_file(
+        clean_restored,
+        relerrs,
+        configdata,
+        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_clean.fits",
+    )
 
     return True
