@@ -49,11 +49,18 @@ def _load_images_and_compute_stats(path_dict: dict, skips: list):
     all_kept_sums = np.array(all_kept_sums).flatten()
     all_kept_peaks = np.array(all_kept_peaks).flatten()
 
-    print(f"Using sums: {np.percentile(all_kept_sums, [50 - 34, 50, 50 + 34])}")
-    print(f"Using peaks: {np.percentile(all_kept_peaks, [50 - 34, 50, 50 + 34])}")
+    logger.info(
+        PROCESS_NAME,
+        f"Using sums: {np.percentile(all_kept_sums, [50 - 34, 50, 50 + 34])}",
+    )
+    logger.info(
+        PROCESS_NAME,
+        f"Using peaks: {np.percentile(all_kept_peaks, [50 - 34, 50, 50 + 34])}",
+    )
 
-    print(
-        f"Relative errs: {np.std(all_kept_sums)/np.mean(all_kept_sums)} vs {np.std(all_kept_peaks)/np.mean(all_kept_peaks)}"
+    logger.info(
+        PROCESS_NAME,
+        f"Relative errs: {np.std(all_kept_sums)/np.mean(all_kept_sums)} vs {np.std(all_kept_peaks)/np.mean(all_kept_peaks)}",
     )
 
     return {

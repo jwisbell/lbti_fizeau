@@ -71,7 +71,13 @@ def datetime_to_julian_date(year, month, day, hour, minute, second):
     return 2415020 + time_delta.total_seconds() / (24 * 60 * 60)
 
 
-def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
+def _load_fits_files(
+    fdir,
+    nods,
+    prefix,
+    skipkeys=[],
+    ramp_params: dict = {"idx": -1, "subtract_min": False},
+):
     # for each nod position open the files
     # extract a box of size `aperture size` nod position in each file
     # extract background aperture in each file
@@ -99,12 +105,13 @@ def _load_fits_files(fdir, nods, prefix, skipkeys=[]):
                 with fits.open(filename) as x:
                     im = np.copy(x[0].data)
                     if len(x[0].data.shape) > 2:
-                        im = np.copy(x[0].data[-1])
+                        im = np.copy(x[0].data[ramp_params["idx"]])
                         if instrument != "NOMIC":
-                            im = np.copy(
-                                x[0].data[-1]
-                            )  # TODO: change back after 1068  # [-1])
-                        # im = np.array([x[0] for x in im])
+                            im = np.copy(x[0].data[ramp_params["idx"]])
+                            # subtracting out the "zero" exposure to remove bad pixels
+                            if ramp_params["subtract_min"]:
+                                im -= x[0].data[0]
+
                     temp.append(_extract_window(im, entry["position"]))
                     pa = float(x[0].header["LBT_PARA"])
                     temp_pas.append(pa)
@@ -214,6 +221,14 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
     output_dir = config["output_dir"]
     skips = [str(x) for x in config["skips"]]
     batch_size = config["batch_size"]
+    try:
+        ramp_params = config["ramp_params"]
+    except KeyError:
+        logger.warn(
+            PROCESS_NAME,
+            "No ramp params set, using default {idx:-1, subtract_min:False}",
+        )
+        ramp_params = {"idx": -1, "subtract_min": False}
 
     prefix = f"n_{obsdate}_"
     if instrument != "NOMIC":
@@ -238,7 +253,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         )
 
         ims, rotations, _, timestamps = _load_fits_files(
-            data_dir, nod_info, prefix, skipkeys=temp_skips
+            data_dir, nod_info, prefix, skipkeys=temp_skips, ramp_params=ramp_params
         )
 
         # ## Do background subtraction and extract in a window

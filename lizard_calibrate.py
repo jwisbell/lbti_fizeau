@@ -21,17 +21,20 @@ from calibration_steps.do_flux_calibration import do_flux_calibration
 PROCESS_NAME = "calibration"
 
 
-def wrap_do_convolution(
+def wrap_do_deconvolution(
     configdata: dict,
     target_configdata: dict,
     calib_configdata: dict,
     output_dir: str,
     logger: Logger,
+    configfile: str,
 ):
     create_filestructure(output_dir, "deconvolution", prefix="calibrated")
     logger.create_log_file("deconvolution")
     logger.info(PROCESS_NAME, "Starting process `do_deconvolution`")
-    if not do_deconvolution(configdata, target_configdata, calib_configdata, logger):
+    if not do_deconvolution(
+        configdata, target_configdata, calib_configdata, logger, configfile
+    ):
         logger.error(PROCESS_NAME, "Process `do_deconvolution` failed")
         exit()
     logger.info(PROCESS_NAME, "Process `do_deconvolution` finished successfully")
@@ -112,8 +115,13 @@ def calibrate(configfile):
     )
 
     # TODO: rotation video within convolution script
-    wrap_do_convolution(
-        configdata, target_configdata, calib_configdata, output_dir, logger
+    wrap_do_deconvolution(
+        configdata,
+        target_configdata,
+        calib_configdata,
+        output_dir,
+        logger,
+        configfile,
     )
 
 

@@ -19,7 +19,7 @@ PROCESS_NAME = "bad_pixel_correction"
 logger = Logger("./")
 
 
-def identify_bad_pixels(image, min_sigma=10):
+def identify_bad_pixels(image, min_sigma=10, niter=1):
     """
     This is basically sigma clipping pixels that are very different from
     their neighbors and setting them to the value of their neighbors
@@ -38,7 +38,6 @@ def identify_bad_pixels(image, min_sigma=10):
     kernel[w // 2, w // 2] = 0
     kernel[kernel == 0] = np.nan
 
-    # TODO: attempt convolution
     for y in range(len(image)):
         for x in range(len(image[0])):
             # slide the kernel
