@@ -6,14 +6,17 @@ Data reduction tools (and pipeline) for LBTI Fizeau imaging. This is actively ev
 
 ### Dependencies
 
-As of 21 October 2024, compatible with latest version of each.
+Install the required packages using
+```
+pip install -r requirements.txt
+```
 
-- Astropy
-- Scipy
-- pandas
-- numpy
-- matplotlib
-- scikit-image
+OPTIONAL! 
+In order to make the reduction faster, you can use the (experimental) package `lizard_rust`. To install, go to [lizard_rust](https://github.com/jwisbell/lizard_rust/releases) and find the .whl file that matches your operating system. **Click the copy button** Install the package using
+```
+pip install url.to.whl 
+```
+where you've pasted the .whl url. 
 
 ### Disk Space
 
