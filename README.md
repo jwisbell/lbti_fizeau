@@ -13,7 +13,7 @@ pip install -r requirements.txt
 ```
 
 OPTIONAL!
-In order to make the reduction faster, you can use the (experimental) package `lizard_rust`. To install, go to [lizard_rust](https://github.com/jwisbell/lizard_rust/releases) and find the .whl file that matches your operating system. **Right click and copy link address** Install the package using
+In order to make the reduction faster, you can use the (experimental) package `fits_lizard`. To install, go to [lizard_rust](https://github.com/jwisbell/lizard_rust/releases) and find the .whl file that matches your operating system. **Right click and copy link address** Install the package using
 
 ```
 pip install url.to.whl
