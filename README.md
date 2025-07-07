@@ -7,39 +7,41 @@ Data reduction tools (and pipeline) for LBTI Fizeau imaging. This is actively ev
 ### Dependencies
 
 Install the required packages using
+
 ```
 pip install -r requirements.txt
 ```
 
-OPTIONAL! 
-In order to make the reduction faster, you can use the (experimental) package `lizard_rust`. To install, go to [lizard_rust](https://github.com/jwisbell/lizard_rust/releases) and find the .whl file that matches your operating system. **Click the copy button** Install the package using
+OPTIONAL!
+In order to make the reduction faster, you can use the (experimental) package `lizard_rust`. To install, go to [lizard_rust](https://github.com/jwisbell/lizard_rust/releases) and find the .whl file that matches your operating system. **Right click and copy link address** Install the package using
+
 ```
-pip install url.to.whl 
+pip install url.to.whl
 ```
-where you've pasted the .whl url. 
+
+where you've pasted the .whl url.
 
 ### Disk Space
 
 Note that Fizeau lucky image includes large amounts of data. 10s or 100s of thousands of raw images make up a raw data set. An example observing night from April 2024 contains 45 GB of raw images. LIZARD produces approximately 15 GB of intermediate and final products during data processing.
 
 ## Usage
+
 ### TLDR
 
-You can run the pipeline by first calling 
+You can run the pipeline by first calling
 
 ```
 lizard.py reduce /path/to/target_config.json
 ```
 
-and then 
+and then
 
 ```
 lizard.py calibrate /path/to/calibration_config.json
-``` 
+```
 
-Details on the format of these config files are listed below. 
-
-
+Details on the format of these config files are listed below.
 
 ### 0. Set up a config file for each target
 
@@ -82,10 +84,12 @@ See `template_target_config.json` for an example. The fields to edit are
 
 ### 1. Run the `lizard_reduce.py` script on each target and calibrator
 
-Usage is 
+Usage is
+
 ```
 lizard.py reduce target_config.json
 ```
+
 , where `target_config.json` is replaced with your config file.
 
 I suggest processing all calibrators first so that their empirical PSFs can be used for the target reduction.
@@ -98,7 +102,8 @@ Included in this step are
 
 ### 2. Run the `lizard_calibrate.py` script on each target-calibrator pair
 
-Usage is 
+Usage is
+
 ```
 lizard.py calibrate /path/to/calibration_config.json
 ```

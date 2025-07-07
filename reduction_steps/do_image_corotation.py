@@ -37,7 +37,7 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
     for name, _ in nod_info.items():
         if name in skips:  # ['6','7','11']:
             continue
-        if "bkg" in name:
+        if "bkg" in name or "off" in name:
             continue
         bkgsubtracted_ims = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"

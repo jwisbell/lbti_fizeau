@@ -162,9 +162,7 @@ def _image_video(img_list1, name):
     return anim
 
 
-def _qa_plots(
-    bg_subtracted_frames, ims, centroid_positions, timestamps, output_dir, target
-):
+def _qa_plots(bg_subtracted_frames, centroid_positions, timestamps, output_dir, target):
     # ## (optional) Plot cycles to quickly assess quality
     # HTML(image_video(bg_subtracted_frames["1"][::2],"2").to_html5_video())
     for key in bg_subtracted_frames.keys():
@@ -188,7 +186,7 @@ def _qa_plots(
 
     _ = plt.figure()
     plt.title("mean flux")
-    for key in ims.keys():
+    for key in bg_subtracted_frames.keys():
         plt.plot(
             [t for t in timestamps[key]],
             [np.nanmean(x) for x in bg_subtracted_frames[key]],
@@ -199,48 +197,21 @@ def _qa_plots(
     plt.close("all")
 
 
-def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
-    # # Load the data
-    #
-    # 1. Extracts a window from each frame
-    # 2. Then does background subtraction using specified nod pairs
-
-    global logger
-    global extraction_size
-    global instrument
-
-    logger = mylogger
-
-    # extract relevant info from config file
-    target = config["target"]
-    nod_info = config["nod_info"]
-    instrument = config["instrument"]
-    extraction_size = config["sub_window"]  # 100
-    data_dir = config["data_dir"]
-    obsdate = config["obsdate"]
-    output_dir = config["output_dir"]
-    skips = [str(x) for x in config["skips"]]
-    batch_size = config["batch_size"]
-    try:
-        ramp_params = config["ramp_params"]
-    except KeyError:
-        logger.warn(
-            PROCESS_NAME,
-            "No ramp params set, using default {idx:-1, subtract_min:False}",
-        )
-        ramp_params = {"idx": -1, "subtract_min": False}
-
-    prefix = f"n_{obsdate}_"
-    if instrument != "NOMIC":
-        prefix = f"lm_{obsdate}_"
-
-    process_path = f"intermediate/{PROCESS_NAME}/"
-
+def _old_bkg_subtraction(
+    nod_info,
+    data_dir,
+    prefix,
+    batch_size,
+    skips,
+    ramp_params,
+    output_dir,
+    process_path,
+    target,
+):
     list_keys = np.array(list(nod_info.keys()))
     num_entries = len(nod_info.keys())
     num_processed = 0
 
-    # handle the file loading in batches to limit RAM usage
     while num_processed < num_entries:
         temp_skips = np.append(
             list_keys[
@@ -311,7 +282,6 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         try:
             _qa_plots(
                 bg_subtracted_frames,
-                ims,
                 centroid_positions,
                 timestamps,
                 output_dir,
@@ -326,6 +296,156 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             PROCESS_NAME,
             f"Batch done! Processed {min(num_processed,num_entries)} of {num_entries}",
         )
+
+
+def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
+    # # Load the data
+    #
+    # 1. Extracts a window from each frame
+    # 2. Then does background subtraction using specified nod pairs
+
+    global logger
+    global extraction_size
+    global instrument
+
+    logger = mylogger
+
+    # extract relevant info from config file
+    target = config["target"]
+    nod_info = config["nod_info"]
+    instrument = config["instrument"]
+    extraction_size = config["sub_window"]  # 100
+    data_dir = config["data_dir"]
+    obsdate = config["obsdate"]
+    output_dir = config["output_dir"]
+    skips = [str(x) for x in config["skips"]]
+    batch_size = config["batch_size"]
+    try:
+        ramp_params = config["ramp_params"]
+    except KeyError:
+        logger.warn(
+            PROCESS_NAME,
+            "No ramp params set, using default {idx:-1, subtract_min:False}",
+        )
+        ramp_params = {"idx": -1, "subtract_min": False}
+
+    prefix = f"n_{obsdate}_"
+    if instrument != "NOMIC":
+        prefix = f"lm_{obsdate}_"
+
+    process_path = f"intermediate/{PROCESS_NAME}/"
+
+    try:
+        from fits_lizard import subtract_mean_from_list
+
+        bg_subtracted_frames = {}
+        rotations = {}
+        timestamps = {}
+
+        # 1. For each key collect the _filenames_ to be loaded for both the key and for the sub_key
+        for key, value in nod_info.items():
+            if "off" in key or "bkg" in key or "skip" in key:
+                continue
+            # TODO: there is only one image being saved...
+            logger.info(PROCESS_NAME, f"Doing background subtraction for key {key}")
+            start_fn = value["start"]
+            end_fn = value["end"]
+            sub_key = value["subtract"]
+
+            sub_start_fn = nod_info[sub_key]["start"]
+            sub_end_fn = nod_info[sub_key]["end"]
+
+            obj_files = [
+                f"{data_dir}/{prefix}{str(i).zfill(6)}.fits"
+                for i in range(start_fn, end_fn + 1)
+            ]
+            bkg_files = [
+                f"{data_dir}/{prefix}{str(i).zfill(6)}.fits"
+                for i in range(sub_start_fn, sub_end_fn + 1)
+            ]
+
+            # 2. Calculate the bg_subtracted_frames for that key
+            result = subtract_mean_from_list(
+                obj_files, bkg_files
+            )  # returns images, rotations, julian dates
+            bkg_sub_ims = [x[0] for x in result]
+            rots = [x[1] for x in result]
+            times = [x[2] for x in result]
+
+            # 3. Crop each frame to the right size
+            cropped_ims = [_extract_window(im, value["position"]) for im in bkg_sub_ims]
+            # TODO: check here
+
+            # 4. Save the cropped frames in the bg_subtracted_frames dict
+            bg_subtracted_frames[key] = np.array(cropped_ims)
+            rotations[key] = np.array(rots)
+            timestamps[key] = np.array(times)
+
+        # save the background-subtracted sub-windows in processed data folder
+        centroid_positions = {}
+
+        for key in bg_subtracted_frames.keys():
+            x = bg_subtracted_frames[key]
+            logger.info(PROCESS_NAME, f"Saving/plotting key {key}")
+            # if "bkg" in key or "off" in key:
+            # continue
+            im = np.sum(bg_subtracted_frames[key], 0)
+            im = median_filter(im, 7)
+            centroid_positions[key] = [
+                np.argmax(np.nansum(im, 0)),
+                np.argmax(np.nansum(im, 1)),
+            ]
+
+            # if extraction_size >= ims[key][0].shape[0]:
+            #    centroid_positions[key] = nod_info[key]["position"]
+
+            np.save(
+                f"{output_dir}/{process_path}/{target}_centroid-positions_cycle{key}.npy",
+                [np.argmax(np.nansum(im, 0)), np.argmax(np.nansum(im, 1))],
+            )
+            np.save(
+                f"{output_dir}/{process_path}/{target}_rotations_cycle{key}.npy",
+                rotations[key],
+            )
+            np.save(
+                f"{output_dir}/{process_path}/{target}_bkg-subtracted_cycle{key}.npy", x
+            )  # save the background-subtracted frames
+
+            np.save(
+                f"{output_dir}/{process_path}/{target}_timestamps_cycle{key}.npy",
+                timestamps[key],
+            )  # save the time stamps of the background-subtracted frames
+        # do the plotting
+        try:
+            _qa_plots(
+                bg_subtracted_frames,
+                centroid_positions,
+                timestamps,
+                output_dir,
+                target,
+            )
+        except Exception as e:
+            logger.error(PROCESS_NAME, f"_qa_plots failed due to {e}")
+
+    except ModuleNotFoundError as e:
+        logger.warn(
+            PROCESS_NAME,
+            "fits_lizard package not found, proceeding with the slower method",
+        )
+        # handle the file loading in batches to limit RAM usage
+        # OLD WAY -- do only if rust version not available
+        _old_bkg_subtraction(
+            nod_info,
+            data_dir,
+            prefix,
+            batch_size,
+            skips,
+            ramp_params,
+            output_dir,
+            process_path,
+            target,
+        )
+
     logger.info(PROCESS_NAME, "Background subtraction is done!")
     return True
 
