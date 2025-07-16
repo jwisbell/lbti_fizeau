@@ -467,7 +467,7 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     fig, (ax, bx) = plt.subplots(1, 2)
     ax.imshow(mean_flux, origin="lower")
     bx.imshow(test_std, origin="lower")
-    plt.show()
+    # plt.show()
     plt.close()
 
     psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
