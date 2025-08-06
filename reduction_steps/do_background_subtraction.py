@@ -63,40 +63,7 @@ def _merge_headers_to_df(hdr_dicts, nod_name):
     # dfs = [polars.from_dict(h) for h in hdr_dicts]
     df = pl.from_dicts(hdr_dicts, strict=False)
     df = df.with_columns(pl.lit(nod_name).alias("nod_name"))
-
-    # the rotations aren't updated frequently enough, calculate them here
-    # based on the ra, dec, and time
-    # actually this isn't true! it was one faulty observation
-    # calculated_rots = _calc_rotations(df)
-
     return df
-
-
-def _calc_rotations(df):
-    # Object coordinates (RA, Dec)
-    ra = df["LBT_RA"][0].strip()
-    dec = df["LBT_DEC"][0].strip()  # Example Dec
-    object_coord = SkyCoord(ra=ra, dec=dec, unit=(u.hourangle, u.deg))
-
-    # Observing location
-    latitude = 32 + 42 / 60 + 05.72 / 3600  # degrees (e.g., Los Angeles)
-    longitude = -(109 + 53 / 60 + 19.32 / 3600)  # degrees
-    elevation = 2902  # meters
-    location = EarthLocation(
-        lat=latitude * u.deg, lon=longitude * u.deg, height=elevation * u.m
-    )
-
-    observer = Observer(location=location, name="LBTI", timezone="America/Phoenix")
-
-    parallactic_angles = []
-    for date, utc in zip(df["DATE-OBS"], df["TIME-OBS"]):
-        obs_time = Time(date + "T" + utc)  # UTC
-        parallactic_angles.append(
-            observer.parallactic_angle(obs_time, object_coord).value
-        )
-    parallactic_angles = np.degrees(np.array(parallactic_angles))
-
-    return parallactic_angles
 
 
 def _savefits(bkg_subbed_images, nod_key, headers, config, process_path):
