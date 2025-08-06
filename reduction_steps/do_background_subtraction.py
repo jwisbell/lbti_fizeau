@@ -16,6 +16,13 @@ from matplotlib.colors import PowerNorm
 from scipy.ndimage import median_filter
 from datetime import datetime
 from utils.util_logger import Logger
+import time
+import polars as pl
+import pickle
+from astropy.coordinates import EarthLocation, AltAz, SkyCoord
+from astropy.time import Time
+from astroplan import Observer
+import astropy.units as u
 
 
 PROCESS_NAME = "bkg_subtraction"
@@ -52,6 +59,69 @@ def _extract_window(im, center):
     return im[ylower:yupper, xlower:xupper]
 
 
+def _merge_headers_to_df(hdr_dicts, nod_name):
+    # dfs = [polars.from_dict(h) for h in hdr_dicts]
+    df = pl.from_dicts(hdr_dicts, strict=False)
+    df = df.with_columns(pl.lit(nod_name).alias("nod_name"))
+
+    # the rotations aren't updated frequently enough, calculate them here
+    # based on the ra, dec, and time
+    # actually this isn't true! it was one faulty observation
+    # calculated_rots = _calc_rotations(df)
+
+    return df
+
+
+def _calc_rotations(df):
+    # Object coordinates (RA, Dec)
+    ra = df["LBT_RA"][0].strip()
+    dec = df["LBT_DEC"][0].strip()  # Example Dec
+    object_coord = SkyCoord(ra=ra, dec=dec, unit=(u.hourangle, u.deg))
+
+    # Observing location
+    latitude = 32 + 42 / 60 + 05.72 / 3600  # degrees (e.g., Los Angeles)
+    longitude = -(109 + 53 / 60 + 19.32 / 3600)  # degrees
+    elevation = 2902  # meters
+    location = EarthLocation(
+        lat=latitude * u.deg, lon=longitude * u.deg, height=elevation * u.m
+    )
+
+    observer = Observer(location=location, name="LBTI", timezone="America/Phoenix")
+
+    parallactic_angles = []
+    for date, utc in zip(df["DATE-OBS"], df["TIME-OBS"]):
+        obs_time = Time(date + "T" + utc)  # UTC
+        parallactic_angles.append(
+            observer.parallactic_angle(obs_time, object_coord).value
+        )
+    parallactic_angles = np.degrees(np.array(parallactic_angles))
+
+    return parallactic_angles
+
+
+def _savefits(bkg_subbed_images, nod_key, headers, config, process_path):
+    start_im = config["nod_info"][nod_key]["start"]
+    end_im = config["nod_info"][nod_key]["end"]
+    band = "lm"
+    if config["instrument"] == "NOMIC":
+        band = "n"
+    # outname = f"lm_{date}_bkgsub_"
+    output_dir = config["output_dir"]
+    target = config["target"]
+    obsdate = config["obsdate"]
+    hdr = fits.Header()
+    for key, value in headers[0].items():
+        if key in ["SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "NAXIS3", "EXTEND"]:
+            continue
+        hdr[key] = value
+    hdu = fits.PrimaryHDU(data=bkg_subbed_images, header=hdr)
+    hdul = fits.HDUList([hdu])
+    hdul.writeto(
+        f"{output_dir}/{process_path}/{target}_bkgsub_nod{nod_key}_{band}_{obsdate}_{str(start_im).zfill(6)}-{str(end_im).zfill(6)}.fits",
+        overwrite=True,
+    )
+
+
 def time_convert(date_string, time_string):
     year, month, day = date_string.split("-")
     hour, minute, second = time_string.split(":")
@@ -85,6 +155,7 @@ def _load_fits_files(
     pas = {}
     fnames = {}
     timestamps = {}
+    all_headers = {}
     # TODO: can this be sped up using multiprocess?
     for name, entry in nods.items():
         if name in skipkeys:
@@ -93,6 +164,7 @@ def _load_fits_files(
         temp = []
         temp_pas = []
         obstime = []
+        headers = []
         logger.info(PROCESS_NAME, f"Loading nod {name}")
         filenames = [
             f"{fdir}{prefix}{str(i).zfill(6)}.fits"
@@ -100,6 +172,7 @@ def _load_fits_files(
         ]
         logger.info(PROCESS_NAME, f"\t {len(filenames)} files")
 
+        start = time.time()
         for filename in filenames:
             try:
                 with fits.open(filename) as x:
@@ -118,20 +191,22 @@ def _load_fits_files(
                     obstime.append(
                         time_convert(x[0].header["date-obs"], x[0].header["time-obs"])
                     )
-                    # returna
+                    headers.append({k: v for k, v in x[0].header.items()})
             except FileNotFoundError as e:
                 logger.warn(PROCESS_NAME, f"\t\t {filename} failed, {e}")
                 continue
             except OSError as e:
                 print(filename)
                 continue
+        print(f"Took {time.time() - start:.1f} seconds")
         images[name] = temp
         pas[name] = temp_pas  # angle_mean(temp_pas)
         fnames[name] = filenames
         timestamps[name] = obstime
+        all_headers[name] = headers
 
         logger.info(PROCESS_NAME, f"\t Done! Mean PA {np.mean(pas[name])}")
-    return images, pas, fnames, timestamps
+    return images, pas, fnames, timestamps, all_headers
 
 
 def _window_background_subtraction(im_arr, background, window_center):
@@ -223,7 +298,7 @@ def _old_bkg_subtraction(
             skips,
         )
 
-        ims, rotations, _, timestamps = _load_fits_files(
+        ims, rotations, _, timestamps, hdr_dicts = _load_fits_files(
             data_dir, nod_info, prefix, skipkeys=temp_skips, ramp_params=ramp_params
         )
 
@@ -234,7 +309,7 @@ def _old_bkg_subtraction(
                 "mean": np.nanmean(entry, 0),
                 "std": np.nanstd(entry, 0),
             }
-        print(list(backgrounds.keys()))
+
         bg_subtracted_frames = {
             key: _window_background_subtraction(
                 ims[key],
@@ -262,6 +337,7 @@ def _old_bkg_subtraction(
             # if extraction_size >= ims[key][0].shape[0]:
             #    centroid_positions[key] = nod_info[key]["position"]
 
+            # TODO: put almost all of this in the dataframe
             np.save(
                 f"{output_dir}/{process_path}/{target}_centroid-positions_cycle{key}.npy",
                 [np.argmax(np.nansum(im, 0)), np.argmax(np.nansum(im, 1))],
@@ -278,6 +354,18 @@ def _old_bkg_subtraction(
                 f"{output_dir}/{process_path}/{target}_timestamps_cycle{key}.npy",
                 timestamps[key],
             )  # save the time stamps of the background-subtracted frames
+
+            if "bkg" in key or "off" in key:
+                continue
+
+            polars_df = _merge_headers_to_df(hdr_dicts[key], key)
+            # Save the DataFrame to a pickle file
+            with open(
+                f"{output_dir}/intermediate/headers/{target}_header_df_nod{key}.pkl",
+                "wb",
+            ) as f:
+                pickle.dump(polars_df, f)
+
         # do the plotting
         try:
             _qa_plots(
@@ -321,6 +409,11 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
     skips = [str(x) for x in config["skips"]]
     batch_size = config["batch_size"]
     try:
+        save_fits = config["save_fits"]
+    except KeyError:
+        save_fits = False
+
+    try:
         ramp_params = config["ramp_params"]
     except KeyError:
         logger.warn(
@@ -346,7 +439,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         for key, value in nod_info.items():
             if "off" in key or "bkg" in key or "skip" in key:
                 continue
-            # TODO: there is only one image being saved...
+
             logger.info(PROCESS_NAME, f"Doing background subtraction for key {key}")
             start_fn = value["start"]
             end_fn = value["end"]
@@ -365,21 +458,36 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             ]
 
             # 2. Calculate the bg_subtracted_frames for that key
+            start = time.time()
             result = subtract_mean_from_list(
                 obj_files, bkg_files
             )  # returns images, rotations, julian dates
-            bkg_sub_ims = [x[0] for x in result]
-            rots = [x[1] for x in result]
-            times = [x[2] for x in result]
+            bkg_sub_ims = [x[0] for x in result[0]]
+            rots = [x[1] for x in result[0]]
+            times = [x[2] for x in result[0]]
+            hdr_dicts = [x[3] for x in result[0]]
+
+            polars_df = _merge_headers_to_df(hdr_dicts, key)
+            print(f"Took {time.time() - start:.1f} seconds")
+
+            # Save the DataFrame to a pickle file
+            with open(
+                f"{output_dir}/intermediate/headers/{target}_header_df_nod{key}.pkl",
+                "wb",
+            ) as f:
+                pickle.dump(polars_df, f)
 
             # 3. Crop each frame to the right size
             cropped_ims = [_extract_window(im, value["position"]) for im in bkg_sub_ims]
-            # TODO: check here
 
             # 4. Save the cropped frames in the bg_subtracted_frames dict
             bg_subtracted_frames[key] = np.array(cropped_ims)
             rotations[key] = np.array(rots)
             timestamps[key] = np.array(times)
+
+            # TODO: add option to save these as fits files
+            if save_fits:
+                _savefits(cropped_ims, key, hdr_dicts, config, process_path)
 
         # save the background-subtracted sub-windows in processed data folder
         centroid_positions = {}
@@ -398,6 +506,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
 
             # if extraction_size >= ims[key][0].shape[0]:
             #    centroid_positions[key] = nod_info[key]["position"]
+            # TODO: save almost all of this in the header dataframe
 
             np.save(
                 f"{output_dir}/{process_path}/{target}_centroid-positions_cycle{key}.npy",
@@ -407,9 +516,10 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
                 f"{output_dir}/{process_path}/{target}_rotations_cycle{key}.npy",
                 rotations[key],
             )
+            # save the background-subtracted frames
             np.save(
                 f"{output_dir}/{process_path}/{target}_bkg-subtracted_cycle{key}.npy", x
-            )  # save the background-subtracted frames
+            )
 
             np.save(
                 f"{output_dir}/{process_path}/{target}_timestamps_cycle{key}.npy",
