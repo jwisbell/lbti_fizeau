@@ -19,11 +19,7 @@ from utils.util_logger import Logger
 import time
 import polars as pl
 import pickle
-from astropy.coordinates import EarthLocation, AltAz, SkyCoord
-from astropy.time import Time
-from astroplan import Observer
-import astropy.units as u
-
+import os
 
 PROCESS_NAME = "bkg_subtraction"
 extraction_size = 100
@@ -138,6 +134,19 @@ def _load_fits_files(
             for i in range(entry["start"], entry["end"] + 1)
         ]
         logger.info(PROCESS_NAME, f"\t {len(filenames)} files")
+
+        # Check if we are dealing with fits or fits.gz
+        test_fname = filenames[np.random.randint(0, len(filenames))]
+        if os.path.exists(test_fname):
+            print("Using uncompressed target files")
+        else:
+            print(
+                "Using compressed target files (*fits.gz) -- NOTE: this takes longer to process"
+            )
+            filenames = [
+                f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz"
+                for i in range(entry["start"], entry["end"] + 1)
+            ]
 
         start = time.time()
         for filename in filenames:
@@ -396,7 +405,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
     process_path = f"intermediate/{PROCESS_NAME}/"
 
     try:
-        from fits_lizard import subtract_mean_from_list
+        from fits_lizard import subtract_mean_from_listX
 
         bg_subtracted_frames = {}
         rotations = {}
@@ -423,6 +432,31 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
                 f"{data_dir}/{prefix}{str(i).zfill(6)}.fits"
                 for i in range(sub_start_fn, sub_end_fn + 1)
             ]
+
+            # Check if we are dealing with fits or fits.gz
+            test_fname = obj_files[np.random.randint(0, len(obj_files))]
+            if os.path.exists(test_fname):
+                print("Using uncompressed target files")
+            else:
+                print(
+                    "Using compressed target files (*fits.gz) -- NOTE: this takes longer to process"
+                )
+                obj_files = [
+                    f"{data_dir}/{prefix}{str(i).zfill(6)}.fits.gz"
+                    for i in range(start_fn, end_fn + 1)
+                ]
+
+            test_fname = bkg_files[np.random.randint(0, len(bkg_files))]
+            if os.path.exists(test_fname):
+                print("Using uncompressed background files")
+            else:
+                print(
+                    "Using compressed background files (*fits.gz) -- NOTE: this takes longer to process"
+                )
+                bkg_files = [
+                    f"{data_dir}/{prefix}{str(i).zfill(6)}.fits.gz"
+                    for i in range(sub_start_fn, sub_end_fn + 1)
+                ]
 
             # 2. Calculate the bg_subtracted_frames for that key
             start = time.time()
@@ -504,7 +538,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         except Exception as e:
             logger.error(PROCESS_NAME, f"_qa_plots failed due to {e}")
 
-    except ModuleNotFoundError as e:
+    except (ModuleNotFoundError, ImportError) as e:
         logger.warn(
             PROCESS_NAME,
             "fits_lizard package not found, proceeding with the slower method",

@@ -474,8 +474,16 @@ def _frame_centering_and_selection(
             polars_df = pickle.load(f)
 
             # add the mask column
-            fs_mask = other_info["mask"]
-            polars_df = polars_df.with_columns(pl.Series("fs_mask", fs_mask))
+            phase_mask = phase_mask
+            polars_df = polars_df.with_columns(pl.Series("phase_mask", phase_mask))
+            percentile_mask = other_info["mask"]
+            polars_df = polars_df.with_columns(
+                pl.Series("percentile_mask", percentile_mask)
+            )
+
+            # add the phase column
+            phase_values = phase_info["central"]
+            polars_df = polars_df.with_columns(pl.Series("central_phase", phase_values))
 
             with open(
                 f"{output_dir}/intermediate/headers/{target}_header_df_nod{nod}.pkl",

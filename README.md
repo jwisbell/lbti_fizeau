@@ -25,6 +25,10 @@ where you've pasted the .whl url.
 
 Note that Fizeau lucky image includes large amounts of data. 10s or 100s of thousands of raw images make up a raw data set. An example observing night from April 2024 contains 45 GB of raw images. LIZARD produces approximately 15 GB of intermediate and final products during data processing.
 
+## Raw Data Format
+
+Raw data (in the form of _.fits) files can be either uncompressed or compressed (e.g., _.fits.gz). The latter takes up less space on your hard-drive but takes significantly longer to process because it must be uncompressed in the background. **If you plan on repeatedly reducing data (for, e.g., testing purposes), I suggest uncompressing the fits files first!**
+
 ## Usage
 
 ### TLDR
