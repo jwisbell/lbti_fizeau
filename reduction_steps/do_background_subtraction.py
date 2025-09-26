@@ -21,6 +21,12 @@ import polars as pl
 import pickle
 import os
 
+from calibration_steps.bad_pixel_correction import (
+    correct_image_after_bpm,
+    load_bpm,
+    apply_bad_pixel_mask,
+)
+
 PROCESS_NAME = "bkg_subtraction"
 extraction_size = 100
 instrument = "NOMIC"
@@ -286,6 +292,10 @@ def _old_bkg_subtraction(
                 "std": np.nanstd(entry, 0),
             }
 
+        # 2.5 apply the bad pixel map
+        # multiply the BPM with each image
+
+        # crop the images to the selected window
         bg_subtracted_frames = {
             key: _window_background_subtraction(
                 ims[key],
@@ -405,7 +415,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
     process_path = f"intermediate/{PROCESS_NAME}/"
 
     try:
-        from fits_lizard import subtract_mean_from_listX
+        from fits_lizard import subtract_mean_from_list
 
         bg_subtracted_frames = {}
         rotations = {}
@@ -478,17 +488,30 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             ) as f:
                 pickle.dump(polars_df, f)
 
+            # 2.5 apply the bad pixel map
+            # multiply the BPM with each image
+            # 2.5.1. load the bad pixel map
+            bpm = load_bpm(hdr_dicts[0])
+
+            # 2.5.2. multiply the images by the bpm
+            masked_images = apply_bad_pixel_mask(bpm, bkg_sub_ims)
+
             # 3. Crop each frame to the right size
-            cropped_ims = [_extract_window(im, value["position"]) for im in bkg_sub_ims]
+            cropped_ims = [
+                _extract_window(im, value["position"]) for im in masked_images
+            ]
+
+            # 2.5.3. Correct the bad pixels with the median of the neighbors
+            corrected_ims = [correct_image_after_bpm(im) for im in cropped_ims]
 
             # 4. Save the cropped frames in the bg_subtracted_frames dict
-            bg_subtracted_frames[key] = np.array(cropped_ims)
+            bg_subtracted_frames[key] = np.array(corrected_ims)
             rotations[key] = np.array(rots)
             timestamps[key] = np.array(times)
 
-            # TODO: add option to save these as fits files
+            # optionally save as fits files
             if save_fits:
-                _savefits(cropped_ims, key, hdr_dicts, config, process_path)
+                _savefits(corrected_ims, key, hdr_dicts, config, process_path)
 
         # save the background-subtracted sub-windows in processed data folder
         centroid_positions = {}
