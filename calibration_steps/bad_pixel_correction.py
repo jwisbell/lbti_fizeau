@@ -130,7 +130,7 @@ def load_bpm(im_hdr):
 
     # bpm[~bpm] = np.nan
 
-    print(bpm.shape)  # should be 2048x2048
+    # print(bpm.shape)  # should be 2048x2048
 
     # get the proper readout region with desired shape
     x1 = int(im_hdr["SUBSECX1"]) - 1

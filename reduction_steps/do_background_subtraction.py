@@ -168,6 +168,7 @@ def _load_fits_files(
                                 im -= x[0].data[0]
 
                     temp.append(_extract_window(im, entry["position"]))
+                    # temp.append(im)
                     pa = float(x[0].header["LBT_PARA"])
                     temp_pas.append(pa)
                     obstime.append(
@@ -294,16 +295,36 @@ def _old_bkg_subtraction(
 
         # 2.5 apply the bad pixel map
         # multiply the BPM with each image
+        bg_subtracted_frames = {}
+        for key in ims.keys():
+            bpm = load_bpm(hdr_dicts[key][0])
+
+            bkg_subbed = [
+                im - backgrounds[nod_info[key]["subtract"]]["mean"] for im in ims[key]
+            ]
+            # 2.5.b. multiply the images by the bpm
+            bpm_windowed = _extract_window(bpm, nod_info[key]["position"])
+            masked_images = apply_bad_pixel_mask(bpm_windowed, bkg_subbed)
+
+            # # 3. Crop each frame to the right size
+            # cropped_ims = [
+            #     _extract_window(im, nod_info[key]["position"]) for im in masked_images
+            # ]
+
+            # 3a Correct the bad pixels with the median of the neighbors
+            corrected_ims = [correct_image_after_bpm(im) for im in masked_images]
+
+            bg_subtracted_frames[key] = np.array(corrected_ims)
 
         # crop the images to the selected window
-        bg_subtracted_frames = {
-            key: _window_background_subtraction(
-                ims[key],
-                backgrounds[nod_info[key]["subtract"]]["mean"],
-                nod_info[key]["position"],
-            )
-            for key in ims.keys()
-        }
+        # bg_subtracted_frames = {
+        #     key: _window_background_subtraction(
+        #         ims[key],
+        #         backgrounds[nod_info[key]["subtract"]]["mean"],
+        #         nod_info[key]["position"],
+        #     )
+        #     for key in ims.keys()
+        # }
 
         # save the background-subtracted sub-windows in processed data folder
         centroid_positions = {}
@@ -415,7 +436,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
     process_path = f"intermediate/{PROCESS_NAME}/"
 
     try:
-        from fits_lizard import subtract_mean_from_list
+        from fits_lizard import subtract_mean_from_listX
 
         bg_subtracted_frames = {}
         rotations = {}
@@ -490,10 +511,10 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
 
             # 2.5 apply the bad pixel map
             # multiply the BPM with each image
-            # 2.5.1. load the bad pixel map
+            # 2.5.a. load the bad pixel map
             bpm = load_bpm(hdr_dicts[0])
 
-            # 2.5.2. multiply the images by the bpm
+            # 2.5.b. multiply the images by the bpm
             masked_images = apply_bad_pixel_mask(bpm, bkg_sub_ims)
 
             # 3. Crop each frame to the right size
@@ -501,7 +522,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
                 _extract_window(im, value["position"]) for im in masked_images
             ]
 
-            # 2.5.3. Correct the bad pixels with the median of the neighbors
+            # 3a Correct the bad pixels with the median of the neighbors
             corrected_ims = [correct_image_after_bpm(im) for im in cropped_ims]
 
             # 4. Save the cropped frames in the bg_subtracted_frames dict
