@@ -71,7 +71,7 @@ def bpm_test():
     return 1
 
 
-def correct_image_after_bpm(masked_image):
+def correct_image_after_bpm(masked_image, skip=False):
     # find each bad pixel and replace with the median of its neighbors
     # what do we do about the edges? (skip?)
 
@@ -80,6 +80,8 @@ def correct_image_after_bpm(masked_image):
     #     for j in range(len(masked_image[i])):
     #         if masked_image[i, j] == 0:
     #             zero_locations.append((i, j))
+    if skip:
+        return masked_image
 
     zero_locations = np.where(masked_image == 0)
 
@@ -111,13 +113,14 @@ def correct_image_after_bpm(masked_image):
     return corrected_image
 
 
-def apply_bad_pixel_mask(bpm, bkg_sub_ims):
+def apply_bad_pixel_mask(bpm, bkg_sub_ims, skip=False):
     # actually apply the bad pixel mask
     # input npm is a binary mask (True means good pixel, False means bad pixel)
     # ensure that all bad pixels are marked as np.nan for easier processing later
+    if skip:
+        return bkg_sub_ims
 
     masked_ims = [bpm * x for x in bkg_sub_ims]
-
     return masked_ims
 
 
@@ -131,16 +134,17 @@ def load_bpm(im_hdr):
     # bpm[~bpm] = np.nan
 
     # print(bpm.shape)  # should be 2048x2048
+    try:
+        # get the proper readout region with desired shape
+        x1 = int(im_hdr["SUBSECX1"]) - 1
+        x2 = int(im_hdr["SUBSECX2"]) - 1
+        y1 = int(im_hdr["SUBSECY1"]) - 1
+        y2 = int(im_hdr["SUBSECY2"]) - 1
 
-    # get the proper readout region with desired shape
-    x1 = int(im_hdr["SUBSECX1"]) - 1
-    x2 = int(im_hdr["SUBSECX2"]) - 1
-    y1 = int(im_hdr["SUBSECY1"]) - 1
-    y2 = int(im_hdr["SUBSECY2"]) - 1
-
-    bpm_window = bpm[y1 : y2 + 1, x1 : x2 + 1]
-
-    return bpm_window
+        bpm_window = bpm[y1 : y2 + 1, x1 : x2 + 1]
+        return bpm_window
+    except KeyError:
+        return bpm
 
 
 if __name__ == "__main__":

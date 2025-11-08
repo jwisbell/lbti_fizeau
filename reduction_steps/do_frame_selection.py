@@ -259,7 +259,11 @@ def _frame_centering_and_selection(
     # this is for using a small window
     if not use_full_window:
         cutout_loc = np.copy(centroid_positions[nod])
-        cutout_loc[0] = cutout_loc[0]
+        print(cutout_loc)
+        max_loc = bg_subtracted_frames[nod][0].shape[0]
+        cutout_loc[0] = np.clip(cutout_loc[0], 32, max_loc - 32)
+        cutout_loc[1] = np.clip(cutout_loc[1], 32, max_loc - 32)
+        print(cutout_loc)
         window_size = custom_window_size
 
     ###############################################################################
