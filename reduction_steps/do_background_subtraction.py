@@ -647,7 +647,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         if do_up_the_ramp:
             # force the script into python mode since up the ramp fitting
             # not yet working in the rust package
-            raise ModuleNotFoundError
+            raise AssertionError
 
         bg_subtracted_frames = {}
         rotations = {}
@@ -764,10 +764,10 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         except Exception as e:
             logger.error(PROCESS_NAME, f"_qa_plots failed due to {e}")
 
-    except (ModuleNotFoundError, ImportError) as e:
+    except (ModuleNotFoundError, ImportError, AssertionError) as e:
         logger.warn(
             PROCESS_NAME,
-            "fits_lizard package not found, proceeding with the slower method",
+            f"fits_lizard package not found OR up-the-ramp selected, proceeding with the slower method: {e}",
         )
         # handle the file loading in batches to limit RAM usage
         # OLD WAY -- do only if rust version not available
