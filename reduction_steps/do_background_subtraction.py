@@ -52,7 +52,7 @@ def _extract_window(im, center):
         numpy array: The extracted window of the image.
     """
     xc, yc = center
-    if extraction_size >= im.shape[0]:
+    if extraction_size >= im.shape[0] or extraction_size <= 0:
         return im
 
     ylower = np.max([0, yc - extraction_size // 2])
@@ -68,6 +68,17 @@ def _merge_headers_to_df(hdr_dicts, nod_name):
     df = pl.from_dicts(hdr_dicts, strict=False)
     df = df.with_columns(pl.lit(nod_name).alias("nod_name"))
     return df
+
+
+def _load_darks(filenames):
+    mean_dark = 0.0
+    for fn in filenames:
+        hdu = fits.open(fn)
+        im = hdu[0].data
+        if len(hdu[0].data.shape) > 2:
+            im = hdu[0].data[-1]
+        mean_dark += im
+    return mean_dark / len(filenames)
 
 
 def _fast_fit_slope(imgcube):
@@ -128,7 +139,7 @@ def _ramp_fitting(im_arr, spacing=1, do_plot=False, full_fit=False):
     s = im_arr[0].shape[0]
 
     # no bias subtraction
-    delta_ims = np.array([im for im in im_arr[::spacing]]).astype("float")
+    delta_ims = np.array([im - im_arr[0] for im in im_arr[::spacing]]).astype("float")
 
     # sigma clip each image
     for i in range(len(delta_ims)):
@@ -146,10 +157,10 @@ def _ramp_fitting(im_arr, spacing=1, do_plot=False, full_fit=False):
     if do_plot:
         fig, ax = plt.subplots()
         slope1 = beta[s // 2 + 1, s // 2 + 1]
-        alpha1 = alpha[s // 2 + 1, s // 2 + 1]
+        alpha1 = alpha[s // 2 + 1, s // 2 + 1] * 0
         upperleft = (512, 1550)
         slope2 = beta[upperleft[1], upperleft[0]]
-        alpha2 = alpha[upperleft[1], upperleft[0]]
+        alpha2 = alpha[upperleft[1], upperleft[0]] * 0
         xvals = np.arange(len(im_arr))
         ax.plot(xvals, slope1 * xvals + alpha1)
         ax.errorbar(
@@ -171,16 +182,18 @@ def _ramp_fitting(im_arr, spacing=1, do_plot=False, full_fit=False):
         plt.tight_layout()
 
         fig2 = plt.figure()
+        med = np.nanmedian(beta * len(im_arr))
+        std = np.nanstd(beta * len(im_arr))
         plt.imshow(
             beta * len(im_arr) + alpha * 0,
             origin="lower",
-            vmin=0,
-            vmax=600,
+            vmin=med - 3 * std,
+            vmax=med + 3 * std,
             cmap="Spectral_r",
         )
-        # plt.savefig("./example_ramps.png")
+        # TODO: save this
         plt.show()
-        # plt.close()
+        plt.close()
 
     # additionally subtract out the channel biases (due to gain)
     corrected_im = _fix_gain(beta * len(im_arr) + alpha * 0)
@@ -237,6 +250,7 @@ def _load_fits_files(
     skipkeys=[],
     ramp_params: dict = {"idx": -1, "subtract_min": False},
     do_up_the_ramp=False,
+    mean_dark=0.0,
 ):
     # for each nod position open the files
     # extract a box of size `aperture size` nod position in each file
@@ -279,16 +293,16 @@ def _load_fits_files(
         for filename in filenames:
             try:
                 with fits.open(filename) as x:
-                    im = np.copy(x[0].data)
+                    im = np.copy(x[0].data) - mean_dark
                     if len(x[0].data.shape) > 2:
                         im = np.copy(x[0].data[ramp_params["idx"]])
                         if instrument != "NOMIC":
-                            im = np.copy(x[0].data[ramp_params["idx"]])
+                            im = np.copy(x[0].data[ramp_params["idx"]]) - mean_dark
                             # subtracting out the "zero" exposure to remove bad pixels
                             if ramp_params["subtract_min"]:
                                 im -= x[0].data[0]
                             if do_up_the_ramp:
-                                im = _ramp_fitting(x[0].data)
+                                im = _ramp_fitting(x[0].data, do_plot=False)
 
                     temp.append(_extract_window(im, entry["position"]))
                     # temp.append(im)
@@ -413,6 +427,11 @@ def _parse_config(config):
     except KeyError:
         skip_bpm = False  # do bad pixel correction by default
 
+    try:
+        dark_file_range = config["dark_file_range"]
+    except KeyError:
+        dark_file_range = (0, 0)
+
     return (
         target,
         nod_info,
@@ -427,6 +446,7 @@ def _parse_config(config):
         save_fits,
         ramp_params,
         skip_bpm,
+        dark_file_range,
     )
 
 
@@ -482,6 +502,7 @@ def _old_bkg_subtraction(
     config=None,
     do_up_the_ramp=False,
     skip_bpm=False,
+    mean_dark=0.0,
 ):
     list_keys = np.array(list(nod_info.keys()))
     num_entries = len(nod_info.keys())
@@ -505,6 +526,7 @@ def _old_bkg_subtraction(
             skipkeys=temp_skips,
             ramp_params=ramp_params,
             do_up_the_ramp=do_up_the_ramp,
+            mean_dark=mean_dark,
         )
 
         # ## Do background subtraction and extract in a window
@@ -603,7 +625,7 @@ def _old_bkg_subtraction(
         num_processed += batch_size
         logger.info(
             PROCESS_NAME,
-            f"Batch done! Processed {min(num_processed,num_entries)} of {num_entries}",
+            f"Batch done! Processed {min(num_processed, num_entries)} of {num_entries}",
         )
 
 
@@ -633,6 +655,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         save_fits,
         ramp_params,
         skip_bpm,
+        dark_file_range,
     ) = _parse_config(config)
 
     prefix = f"n_{obsdate}_"
@@ -640,6 +663,14 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         prefix = f"lm_{obsdate}_"
 
     process_path = f"intermediate/{PROCESS_NAME}/"
+
+    # 0. Load the (optional) darks for dark subtraction
+    mean_dark = 0
+    if dark_file_range != (0, 0):
+        dark_files, _ = _get_filenames(
+            data_dir, prefix, dark_file_range[0], dark_file_range[1], 0, 0
+        )
+        mean_dark = _load_darks(dark_files)
 
     try:
         from fits_lizard import subtract_mean_from_list
@@ -675,7 +706,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             result = subtract_mean_from_list(
                 obj_files, bkg_files, do_up_the_ramp, ramp_params["subtract_min"]
             )  # returns images, rotations, julian dates
-            bkg_sub_ims = [x[0] for x in result[0]]
+            bkg_sub_ims = [x[0] - 2 * mean_dark for x in result[0]]
             rots = [x[1] for x in result[0]]
             times = [x[2] for x in result[0]]
             hdr_dicts = [x[3] for x in result[0]]
@@ -785,6 +816,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             save_fits=save_fits,
             config=config,
             skip_bpm=skip_bpm,
+            mean_dark=mean_dark,
         )
 
     logger.info(PROCESS_NAME, "Background subtraction is done!")

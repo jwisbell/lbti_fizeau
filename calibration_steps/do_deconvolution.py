@@ -8,7 +8,6 @@ Produces the final images and plots to diagnose quality.
 Called by lizard_calibrate
 """
 
-from typing import Dict
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -23,6 +22,8 @@ from scipy.optimize import least_squares
 import pickle
 import json
 from astropy.io import fits
+import torch
+import torch.nn.functional as F
 
 from utils.util_logger import Logger
 from utils.utils import argmax2d, gauss, imshift, find_max_loc, write_to_fits
@@ -70,7 +71,7 @@ def derotate(frame, rot):
 def _write_fits_file(data, relerr, header_info, fname):
     hdr = fits.Header()
     for key, value in header_info.items():
-        if key in ["target_config", "calib_config", "output_dir"]:
+        if key in ["target_config", "calib_config"]:
             continue
         try:
             if isinstance(value, dict):
@@ -320,7 +321,7 @@ def _plot_beamsize(
     )
     ax.add_patch(ell2)
     plt.title(
-        f"Restoring Beam: approx {minor} x {major} px ({minor*PIXEL_SCALE*1000:0.1f} x {major*PIXEL_SCALE*1000:0.1f} mas)\n Fitted: {fitted_gauss[1]:0.1f}x{fitted_gauss[0]:0.1f}px, PA:{fitted_gauss[2]:0.1f}deg"
+        f"Restoring Beam: approx {minor} x {major} px ({minor * PIXEL_SCALE * 1000:0.1f} x {major * PIXEL_SCALE * 1000:0.1f} mas)\n Fitted: {fitted_gauss[1]:0.1f}x{fitted_gauss[0]:0.1f}px, PA:{fitted_gauss[2]:0.1f}deg"
     )
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/psf_fwhm_{targname}.png")
 
@@ -451,8 +452,8 @@ def wrap_clean(
             yv,
             resulting_im.shape[1] // 2,
             resulting_im.shape[0] // 2,
-            major / (2 * np.sqrt(2 * np.log(2))),
-            minor / (2 * np.sqrt(2 * np.log(2))),
+            major,  # / (2 * np.sqrt(2 * np.log(2))),
+            minor,  # / (2 * np.sqrt(2 * np.log(2))),
             angle,
             1,
         )
@@ -738,7 +739,7 @@ def wrap_clean(
 
             plt.close("all")
 
-    return convim, residual_im, resulting_im
+    return convim, residual_im, resulting_im, mygauss
 
 
 def wrap_rl(dirty_im, psf_estimate, configdata, target):
@@ -853,7 +854,7 @@ def clean_test(debug=False):
     dirty_im[y, x] = 1
     # 2. Find the max val and assert they are the same
     max_y, max_x = find_max_loc(dirty_im, False)
-    assert x == max_x and y == max_y, f"Expected {x,y}, got {max_x, max_y}"
+    assert x == max_x and y == max_y, f"Expected {x, y}, got {max_x, max_y}"
     # 3. Shift a mock psf to that location
     psf = np.zeros((s, s))
     psf[psf.shape[0] // 2, psf.shape[1] // 2] = 1
@@ -865,9 +866,156 @@ def clean_test(debug=False):
         bx.imshow(temp, origin="lower")
         plt.show()
     # 4. assert that the max location of the psf is at the original location
-    assert px == x and py == y, f"Expected {x,y}, got {px,py}"
+    assert px == x and py == y, f"Expected {x, y}, got {px, py}"
 
     return 1
+
+
+def _soft_thresholding(x, kappa):
+    """The proximal operator for L1 regularization."""
+    return np.sign(x) * np.maximum(np.abs(x) - kappa, 0)
+
+
+def _total_variation_loss(I):
+    diff_x = torch.abs(I[:, :, :, 1:] - I[:, :, :, :-1]).sum()
+    diff_y = torch.abs(I[:, :, 1:, :] - I[:, :, :-1, :]).sum()
+    return diff_x + diff_y
+
+
+def admm_deconvolve(image, psf, lmbda=0.01, rho=1.0, iterations=50, debug=False):
+    """
+    ADMM for Image Deconvolution with L2 Regularization
+    image: Observed mxn grid
+    psf:   Known mxn PSF (should be centered or padded)
+    lmbda: Regularization strength
+    rho:   ADMM penalty parameter
+    """
+    m, n = image.shape
+
+    # 1. Precompute Fourier Transforms
+    I_hat = np.fft.fft2(image)
+    K_hat = np.fft.fft2(psf)
+    K_hat_conj = np.conj(K_hat)
+
+    # Precompute the inverse filter denominator
+    # This is the "Data Space" solver component
+    denominator = np.abs(K_hat) ** 2 + rho
+
+    # 2. Initialize variables
+    M = np.zeros((m, n))  # The model we want to find
+    z = np.zeros((m, n))  # The auxiliary variable
+    u = np.zeros((m, n))  # The dual variable (Lagrange multiplier)
+    steps = []
+    for _ in range(iterations):
+        # --- Step 1: M-Update (Solving in Fourier Domain) ---
+        # Solve (K^T K + rho*I) M = K^T I + rho(z - u)
+        numerator = K_hat_conj * I_hat + rho * np.fft.fft2(z - u)
+        M = np.real(np.fft.ifft2(numerator / denominator))
+
+        # --- Step 2: z-Update (Proximal Operator / Denoising) ---
+        # For L2 regularization, this is a simple weighted average
+        z = (rho * (M + u)) / (2 * lmbda + rho)
+
+        # For L1 (Sparsity), use soft_thresholding(M + u, lmbda/rho)
+        # z = _soft_thresholding(M + u, lmbda / rho)
+
+        # --- Step 3: u-Update (Dual Update) ---
+        u = u + M - z
+        if debug:
+            steps.append(np.fft.fftshift(M))
+
+    if debug:
+        step = 100
+        length = iterations // step
+        fig, axarr = plt.subplots(1, length, sharex=True, sharey=True)
+        if length > 8:
+            plt.close()
+            fig, axarr = plt.subplots(2, length // 2, sharex=True, sharey=True)
+        for idx, im in enumerate(steps[::step]):
+            axarr.flatten()[idx].imshow(im, origin="lower")
+        plt.show()
+
+    return np.fft.fftshift(M)
+
+
+def fit_pixels_adam(
+    image_obs: np.ndarray,
+    psf: np.ndarray,
+    lr: float = 0.1,
+    iterations: int = 500,
+    alpha: float = 1e-3,
+    mode: str = "mse",
+):
+    """
+    Fits an mxn model to an mxn observation using Adam.
+    image_obs: 2D numpy array (the blurred, noisy data)
+    psf:       2D numpy array (the known PSF)
+    """
+    # Normalize PSF (Crucial!)
+    psf_norm = psf / np.sum(psf)
+
+    # 2. Create pytorch  Tensors
+    I = torch.tensor(image_obs, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+
+    K = torch.tensor(psf_norm, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    K_fft = (
+        torch.fft.fft2(torch.tensor(psf_norm, dtype=torch.float32))
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
+
+    # Initialize M with the observed image, not zeros
+    M = torch.nn.Parameter(
+        torch.tensor(
+            image_obs
+            + np.random.randn(image_obs.shape[0], image_obs.shape[1])
+            * 0.1
+            * np.nanmax(image_obs),
+            dtype=torch.float32,
+        )
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
+
+    optimizer = torch.optim.Adam([M], lr=lr, amsgrad=True)
+
+    for i in range(iterations):
+        optimizer.zero_grad()
+
+        # Forward Model Step: Convolve current model M with known PSF K
+        I_pred = torch.abs(
+            torch.fft.fftshift(torch.fft.ifft2(torch.fft.fft2(M) * K_fft))
+        )
+
+        # Loss Function: Mean Squared Error (L2)
+        # data_loss = F.mse_loss(I_pred, I)
+        data_loss = F.huber_loss(I_pred, I)
+        loss = 0.0
+        # TODO: try F.huber_loss(I_pred, I)
+
+        if mode == "mse":
+            # Backward Pass: Calculate gradients for every pixel in M
+            loss = data_loss
+        elif mode == "tv" or mode == "totalvariation":
+            # regularization. for now just total variation, more to come
+            reg_loss = alpha * _total_variation_loss(M)
+
+            # compute total loss
+            loss = data_loss + reg_loss
+        else:
+            raise ValueError(f"Mode '{mode}' not recognized. Use 'mse' or 'tv'")
+        # loss -= torch.sum(I_pred * torch.log(I_pred + 1e-10)) * 1e-4
+        loss.backward()
+        optimizer.step()
+
+        # pixels cannot be negative
+        with torch.no_grad():
+            M.clamp_(min=0)
+
+        if i % 100 == 0:
+            print(f"Iteration {i}: Loss {loss.item():.6f}")
+
+    return M.detach().squeeze().numpy()
 
 
 def do_deconvolution(
@@ -998,7 +1146,7 @@ def do_deconvolution(
 
     _do_psf_subtraction(dirty_im, psf_estimate, configdata, targname, calibname)
 
-    clean_restored, clean_residual, clean_pt_src = wrap_clean(
+    clean_restored, clean_residual, clean_pt_src, restoring_beam = wrap_clean(
         dirty_im,
         psf_estimate,
         configdata,
@@ -1012,6 +1160,56 @@ def do_deconvolution(
     deconvolved_RL = wrap_rl(dirty_im, psf_estimate, configdata, targname)
     if deconvolved_RL is None:
         return False
+
+    forwardmodel = fit_pixels_adam(
+        dirty_im / np.max(dirty_im),
+        psf_estimate,
+        lr=0.1,
+        alpha=1e-8,
+        mode="tv",
+        iterations=100000,
+    )
+    # TODO: convolve this with the restoring beam?
+
+    fig, (ax, bx, cx, dx) = plt.subplots(1, 4, sharex=True, sharey=True)
+    ax.imshow(
+        forwardmodel,
+        origin="lower",
+        norm=PowerNorm(gamma=0.5, vmin=0),
+        cmap="Spectral_r",
+    )
+    fm_conv = np.abs(
+        np.fft.fftshift(
+            np.fft.ifft2(np.fft.fft2(forwardmodel) * np.fft.fft2(restoring_beam))
+        )
+    )
+    bx.imshow(
+        fm_conv,
+        origin="lower",
+        norm=PowerNorm(gamma=0.5, vmin=0),
+        cmap="Spectral_r",
+    )
+    fm_conv = np.abs(
+        np.fft.fftshift(
+            np.fft.ifft2(
+                np.fft.fft2(forwardmodel)
+                * np.fft.fft2(psf_estimate / np.sum(psf_estimate))
+            )
+        )
+    )
+    cx.imshow(
+        fm_conv,
+        origin="lower",
+        norm=PowerNorm(gamma=0.5, vmin=0),
+        cmap="Spectral_r",
+    )
+    dx.imshow(
+        dirty_im / np.nanmax(dirty_im),
+        origin="lower",
+        norm=PowerNorm(gamma=0.5, vmin=0),
+        cmap="Spectral_r",
+    )
+    plt.show()
 
     # save the results in a pkl file...
     datadict = {
@@ -1043,6 +1241,12 @@ def do_deconvolution(
         relerrs,
         configdata,
         f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_clean.fits",
+    )
+    _write_fits_file(
+        forwardmodel,
+        relerrs,
+        configdata,
+        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_pixelfit.fits",
     )
 
     return True
