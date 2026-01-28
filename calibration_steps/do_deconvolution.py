@@ -69,6 +69,8 @@ def derotate(frame, rot):
 
 
 def _write_fits_file(data, relerr, header_info, fname):
+    if data is None:
+        return
     hdr = fits.Header()
     for key, value in header_info.items():
         if key in ["target_config", "calib_config"]:
@@ -83,7 +85,7 @@ def _write_fits_file(data, relerr, header_info, fname):
             continue
 
     hdu = fits.PrimaryHDU(data=data, header=hdr)
-    hdu2 = fits.ImageHDU(data=np.mean(relerr, 0) * data, name="IMERRS")
+    hdu2 = fits.ImageHDU(data=np.mean(relerr, axis=0) * data, name="IMERRS")
     hdul = fits.HDUList([hdu, hdu2])
     hdul.writeto(
         fname,
@@ -353,29 +355,18 @@ def _plot_beamsize(
     return model
 
 
-def wrap_clean(
-    dirty_im, psf_estimate, configdata, target, configfile: str, mode="interactive"
+def _est_restoring_beam(
+    psf_estimate, configdata, target, configfile: str, mode="interactive"
 ):
-    """
-    Wraps the do_clean function, extracting the relevant parameters from the config files and plotting the results
-    """
-
     try:
-        n_iter = float(configdata["clean_niter"])  # 1e5
-        gain = float(configdata["clean_gain"])  # 1e-3
         minor = float(configdata["clean_beam"]["minor"])
         major = float(configdata["clean_beam"]["major"])
         angle = float(configdata["clean_beam"]["rot"])
-        phat = float(configdata["clean_phat"])
-        threshold = float(configdata["clean_threshold"])
     except KeyError as e:
         logger.error(
             PROCESS_NAME, f"One or more config parameters for CLEAN is invalid: {e}"
         )
         return None, None, None
-
-    if threshold == -1:
-        threshold = None
 
     while True:
         fitted_gauss = _plot_beamsize(
@@ -400,7 +391,19 @@ def wrap_clean(
                 "Modify the psf ('major XX', 'minor XX', 'pa XX') or 'okay':\t"
             )
             if command == "okay":
-                # TODO: save the updated settings
+                do_save = input("Save your parameters? (y | n): ")
+                if do_save == "y" or do_save == "yes":
+                    with open(configfile) as cfg:
+                        old_configdata = json.load(cfg)
+                    new_configdata = {k: v for k, v in old_configdata.items()}
+                    new_configdata["clean_beam"] = {
+                        "major": major,
+                        "minor": minor,
+                        "rot": angle,
+                    }
+                    with open(configfile, "w") as file:
+                        json.dump(new_configdata, file, indent=4)
+                    logger.info(PROCESS_NAME, "New parameters saved!")
                 plt.close("all")
                 break
             elif "major" in command:
@@ -428,6 +431,61 @@ def wrap_clean(
 
             plt.close("all")
     logger.info(PROCESS_NAME, "Beam selection completed. Continuing ... ")
+    configdata["clean_beam"]["major"] = major
+    configdata["clean_beam"]["minor"] = minor
+    configdata["clean_beam"]["rot"] = angle
+    return None
+
+
+def wrap_clean(
+    dirty_im,
+    psf_estimate,
+    configdata,
+    target,
+    configfile: str,
+    mode="interactive",
+    skip=False,
+):
+    """
+    Wraps the do_clean function, extracting the relevant parameters from the config files and plotting the results
+    """
+
+    try:
+        n_iter = float(configdata["clean_niter"])  # 1e5
+        gain = float(configdata["clean_gain"])  # 1e-3
+        minor = float(configdata["clean_beam"]["minor"])
+        major = float(configdata["clean_beam"]["major"])
+        angle = float(configdata["clean_beam"]["rot"])
+        phat = float(configdata["clean_phat"])
+        try:
+            threshold = float(configdata["clean_threshold"])
+        except TypeError:
+            threshold = -1
+    except KeyError as e:
+        logger.error(
+            PROCESS_NAME, f"One or more config parameters for CLEAN is invalid: {e}"
+        )
+        return None, None, None
+
+    if threshold == -1:
+        threshold = None
+
+    xv, yv = np.meshgrid(
+        np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
+    )
+    mygauss = gauss(
+        xv,
+        yv,
+        dirty_im.shape[1] // 2,
+        dirty_im.shape[0] // 2,
+        major,  # / (2 * np.sqrt(2 * np.log(2))),
+        minor,  # / (2 * np.sqrt(2 * np.log(2))),
+        angle,
+        1,
+    )
+    mygauss /= np.sum(mygauss)
+    if skip:
+        return None, None, None, mygauss
 
     resulting_im = None
     im_to_clean = np.copy(dirty_im)
@@ -444,9 +502,6 @@ def wrap_clean(
             resulting_im=resulting_im,
         )
 
-        xv, yv = np.meshgrid(
-            np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
-        )
         mygauss = gauss(
             xv,
             yv,
@@ -742,11 +797,12 @@ def wrap_clean(
     return convim, residual_im, resulting_im, mygauss
 
 
-def wrap_rl(dirty_im, psf_estimate, configdata, target):
+def wrap_rl(dirty_im, psf_estimate, configdata, target, skip=False):
     """
     Wraps the richardson_lucy deconvolution, extracting relevant config parameters and plotting the results
     """
-
+    if skip:
+        return None
     try:
         niter = int(configdata["rl_niter"])
         eps = float(configdata["rl_eps"])
@@ -945,6 +1001,9 @@ def fit_pixels_adam(
     iterations: int = 500,
     alpha: float = 1e-3,
     mode: str = "mse",
+    patience: int = 100,
+    min_delta: float = 5e-7,
+    early_stop: bool = True,
 ):
     """
     Fits an mxn model to an mxn observation using Adam.
@@ -969,7 +1028,7 @@ def fit_pixels_adam(
         torch.tensor(
             image_obs
             + np.random.randn(image_obs.shape[0], image_obs.shape[1])
-            * 0.1
+            * 0.0
             * np.nanmax(image_obs),
             dtype=torch.float32,
         )
@@ -979,43 +1038,182 @@ def fit_pixels_adam(
 
     optimizer = torch.optim.Adam([M], lr=lr, amsgrad=True)
 
+    best_loss = float("inf")
+    best_model_state = None
+    counter = 0
     for i in range(iterations):
-        optimizer.zero_grad()
+        try:
+            optimizer.zero_grad()
 
-        # Forward Model Step: Convolve current model M with known PSF K
-        I_pred = torch.abs(
-            torch.fft.fftshift(torch.fft.ifft2(torch.fft.fft2(M) * K_fft))
-        )
+            # Forward Model Step: Convolve current model M with known PSF K
+            I_pred = torch.abs(
+                torch.fft.fftshift(torch.fft.ifft2(torch.fft.fft2(M) * K_fft))
+            )
 
-        # Loss Function: Mean Squared Error (L2)
-        # data_loss = F.mse_loss(I_pred, I)
-        data_loss = F.huber_loss(I_pred, I)
-        loss = 0.0
-        # TODO: try F.huber_loss(I_pred, I)
+            # Loss Function: Mean Squared Error (L2)
+            # data_loss = F.mse_loss(I_pred, I)
+            data_loss = F.huber_loss(I_pred, I)
+            loss = 0.0
+            # TODO: try F.huber_loss(I_pred, I)
 
-        if mode == "mse":
-            # Backward Pass: Calculate gradients for every pixel in M
-            loss = data_loss
-        elif mode == "tv" or mode == "totalvariation":
-            # regularization. for now just total variation, more to come
-            reg_loss = alpha * _total_variation_loss(M)
+            if mode == "mse":
+                # Backward Pass: Calculate gradients for every pixel in M
+                loss = data_loss
+            elif mode == "tv" or mode == "totalvariation":
+                # regularization. for now just total variation, more to come
+                reg_loss = alpha * _total_variation_loss(M)
+                loss = data_loss + reg_loss
+            elif mode == "l1":
+                # regularization. for now just total variation, more to come
+                reg_loss = alpha * torch.norm(M, p=1)
+                # compute total loss
+                loss = data_loss + reg_loss
+            elif mode == "l2":
+                # regularization. for now just total variation, more to come
+                reg_loss = alpha * torch.norm(M, p=2)
+                # compute total loss
+                loss = data_loss + reg_loss
+            else:
+                raise ValueError(f"Mode '{mode}' not recognized. Use 'mse' or 'tv'")
+            # loss -= torch.sum(I_pred * torch.log(I_pred + 1e-10)) * 1e-4
+            loss.backward()
+            optimizer.step()
 
-            # compute total loss
-            loss = data_loss + reg_loss
-        else:
-            raise ValueError(f"Mode '{mode}' not recognized. Use 'mse' or 'tv'")
-        # loss -= torch.sum(I_pred * torch.log(I_pred + 1e-10)) * 1e-4
-        loss.backward()
-        optimizer.step()
+            # pixels cannot be negative
+            with torch.no_grad():
+                M.clamp_(min=0)
 
-        # pixels cannot be negative
-        with torch.no_grad():
-            M.clamp_(min=0)
+            # --- EARLY STOPPING LOGIC ---
+            if early_stop:
+                current_loss = loss.item()
 
-        if i % 100 == 0:
-            print(f"Iteration {i}: Loss {loss.item():.6f}")
+                # Check if the improvement is greater than min_delta
+                if current_loss < best_loss - min_delta:
+                    best_loss = current_loss
+                    best_model_state = torch.clone(M)  # Save the best version
+                    counter = 0  # Reset counter
+                else:
+                    counter += 1
+
+                if counter >= patience:
+                    print(
+                        f"Early stopping triggered at iteration {i}. Best loss: {best_loss:.6f}"
+                    )
+                    # Restore the best model found before stopping
+                    with torch.no_grad():
+                        M.copy_(best_model_state)
+                    stop_iter = i
+                    break
+
+            prev = torch.clone(M)
+            if i % 100 == 0:
+                print(f"Iteration {i}: Loss {loss.item():.6f}")
+        except KeyboardInterrupt:
+            print("Manually stopping early")
+            break
 
     return M.detach().squeeze().numpy()
+
+
+def wrap_pixel_fit(
+    dirty_im, psf_estimate, restoring_beam, targname, config, skip=False
+):
+    if skip:
+        # TODO: return an old result instead?
+        return None, None
+
+    output_dir = config["output_dir"]
+
+    # load settings from config
+    try:
+        lr = float(config["adam"]["learning_rate"])
+    except KeyError:
+        lr = 0.1
+    try:
+        reg_strength = float(config["adam"]["reg_strength"])
+    except KeyError:
+        reg_strength = 1e-8
+    try:
+        reg_func = config["adam"]["reg_func"]
+    except KeyError:
+        reg_func = "l1"
+    try:
+        niter = int(config["adam"]["niter"])
+    except KeyError:
+        niter = 1000
+    try:
+        early_stop = bool(config["adam"]["early_stop"])
+    except KeyError:
+        early_stop = True
+    try:
+        early_stop_patience = int(config["adam"]["early_stop_patience"])
+    except KeyError:
+        early_stop_patience = 100
+    try:
+        early_stop_delta = float(config["adam"]["early_stop_delta"])
+    except KeyError:
+        early_stop_delta = 1e-7
+
+    forwardmodel = fit_pixels_adam(
+        dirty_im - np.mean(dirty_im[:10, :10]),
+        psf_estimate - np.mean(psf_estimate[:10, :10]),
+        lr=lr,
+        alpha=reg_strength,
+        mode=reg_func,
+        iterations=niter,
+        early_stop=early_stop,
+        patience=early_stop_patience,
+        min_delta=early_stop_delta,
+    )
+
+    fig, (ax, bx, cx, dx) = plt.subplots(1, 4, sharex=True, sharey=True)
+    ax.imshow(
+        forwardmodel,
+        origin="lower",
+        norm=PowerNorm(gamma=0.5, vmin=0),
+        cmap="Spectral_r",
+    )
+    fm_conv = np.abs(
+        np.fft.fftshift(
+            np.fft.ifft2(np.fft.fft2(forwardmodel) * np.fft.fft2(restoring_beam))
+        )
+    )
+    bx.imshow(
+        fm_conv,
+        origin="lower",
+        norm=PowerNorm(gamma=0.5, vmin=0),
+        cmap="Spectral_r",
+    )
+
+    fm_conv_psf = np.abs(
+        np.fft.fftshift(
+            np.fft.ifft2(
+                np.fft.fft2(forwardmodel)
+                * np.fft.fft2(psf_estimate / np.sum(psf_estimate))
+            )
+        )
+    )
+    cx.imshow(
+        fm_conv_psf,
+        origin="lower",
+        norm=PowerNorm(gamma=0.5, vmin=0),
+        cmap="Spectral_r",
+    )
+    dx.imshow(
+        dirty_im / np.nanmax(dirty_im),
+        origin="lower",
+        norm=PowerNorm(gamma=0.5, vmin=0),
+        cmap="Spectral_r",
+    )
+    ax.set_title("Pixel Fit")
+    bx.set_title("Pixel Fit x Restoring Beam")
+    cx.set_title("Pixel Fit x PSF")
+    dx.set_title("Dirty Image")
+
+    # plt.show()
+    plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{targname}_pixelfit_results.png")
+    plt.close("all")
+    return forwardmodel, fm_conv
 
 
 def do_deconvolution(
@@ -1025,6 +1223,7 @@ def do_deconvolution(
     mylogger: Logger,
     configfile: str,
     interactive=True,
+    skip_methods={"clean": False, "rl": False, "pixelfit": False},
 ) -> bool:
     """
     Wraps the two deconvolution methods, extracting relevant config parameters and saving the results.
@@ -1114,8 +1313,15 @@ def do_deconvolution(
         logger.error(PROCESS_NAME, f"One or more config entries is incorrect: {e}")
         return False
 
-    # 1. Attempt flux calibration, if files are not available, set a global flag for plot labels
+    # 1. Load flux calibration, if files are not available, set a global flag for plot labels
+    # fluxcal = np.load(
+    #     f"{output_dir}/calibrated/flux_calibration/sci_{targname}_with_cal_{calibname}_flux_percentiles.npy"
+    # )
+    # print(fluxcal)
+    # relerrs = [fluxcal[-2], fluxcal[-1]]
+
     global is_flux_cal
+    # this is the per-pixel uncertainty
     try:
         flux_fname = f"{output_dir}/calibrated/flux_calibration/sci_{targname}_with_cal_{calibname}_flux_percentiles.npy"
         flux_percentiles = np.load(flux_fname)
@@ -1146,6 +1352,14 @@ def do_deconvolution(
 
     _do_psf_subtraction(dirty_im, psf_estimate, configdata, targname, calibname)
 
+    _est_restoring_beam(
+        psf_estimate,
+        configdata,
+        targname,
+        configfile,
+        mode="interactive",
+    )
+
     clean_restored, clean_residual, clean_pt_src, restoring_beam = wrap_clean(
         dirty_im,
         psf_estimate,
@@ -1153,100 +1367,77 @@ def do_deconvolution(
         targname,
         configfile,
         mode="interactive",
+        skip=skip_methods["clean"],
     )
-    if clean_restored is None:
-        return False
+    # if clean_restored is None:
+    #     return False
 
-    deconvolved_RL = wrap_rl(dirty_im, psf_estimate, configdata, targname)
-    if deconvolved_RL is None:
-        return False
+    deconvolved_RL = wrap_rl(
+        dirty_im, psf_estimate, configdata, targname, skip_methods["rl"]
+    )
+    # if deconvolved_RL is None:
+    #     return False
 
-    forwardmodel = fit_pixels_adam(
-        dirty_im / np.max(dirty_im),
+    forwardmodel, fm_conv = wrap_pixel_fit(
+        dirty_im,
         psf_estimate,
-        lr=0.1,
-        alpha=1e-8,
-        mode="tv",
-        iterations=100000,
+        restoring_beam,
+        targname,
+        configdata,
+        skip_methods["pixelfit"],
     )
-    # TODO: convolve this with the restoring beam?
-
-    fig, (ax, bx, cx, dx) = plt.subplots(1, 4, sharex=True, sharey=True)
-    ax.imshow(
-        forwardmodel,
-        origin="lower",
-        norm=PowerNorm(gamma=0.5, vmin=0),
-        cmap="Spectral_r",
-    )
-    fm_conv = np.abs(
-        np.fft.fftshift(
-            np.fft.ifft2(np.fft.fft2(forwardmodel) * np.fft.fft2(restoring_beam))
-        )
-    )
-    bx.imshow(
-        fm_conv,
-        origin="lower",
-        norm=PowerNorm(gamma=0.5, vmin=0),
-        cmap="Spectral_r",
-    )
-    fm_conv = np.abs(
-        np.fft.fftshift(
-            np.fft.ifft2(
-                np.fft.fft2(forwardmodel)
-                * np.fft.fft2(psf_estimate / np.sum(psf_estimate))
-            )
-        )
-    )
-    cx.imshow(
-        fm_conv,
-        origin="lower",
-        norm=PowerNorm(gamma=0.5, vmin=0),
-        cmap="Spectral_r",
-    )
-    dx.imshow(
-        dirty_im / np.nanmax(dirty_im),
-        origin="lower",
-        norm=PowerNorm(gamma=0.5, vmin=0),
-        cmap="Spectral_r",
-    )
-    plt.show()
-
-    # save the results in a pkl file...
-    datadict = {
-        "clean_restored": clean_restored,
-        "clean_residual": clean_residual,
-        "psf": psf_estimate,
-        "clean_pt_src": clean_pt_src,
-        "dirty_im": dirty_im,
-        "rl": deconvolved_RL,
-        "relative_flux_errs": relerrs,
-    }
-    res = "matched"
-    with open(
-        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_convolved_cleaned.pkl",
-        "wb",
-    ) as handle:
-        pickle.dump(datadict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     # save the images as fits files for sharing
-    _write_fits_file(
-        deconvolved_RL,
-        relerrs,
-        configdata,
-        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_rl.fits",
-    )
+    if not skip_methods["rl"]:
+        logger.info(PROCESS_NAME, "Writing R-L image to fits file")
+        _write_fits_file(
+            deconvolved_RL,
+            relerrs,
+            configdata,
+            f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_rl.fits",
+        )
 
-    _write_fits_file(
-        clean_restored,
-        relerrs,
-        configdata,
-        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_clean.fits",
-    )
-    _write_fits_file(
-        forwardmodel,
-        relerrs,
-        configdata,
-        f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_pixelfit.fits",
-    )
+    if not skip_methods["clean"]:
+        logger.info(PROCESS_NAME, "Writing CLEAN image to fits file")
+        _write_fits_file(
+            clean_restored,
+            relerrs,
+            configdata,
+            f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_clean.fits",
+        )
+        # save the results in a pkl file
+        datadict = {
+            "clean_restored": clean_restored,
+            "clean_residual": clean_residual,
+            "psf": psf_estimate,
+            "clean_pt_src": clean_pt_src,
+            "dirty_im": dirty_im,
+            "rl": deconvolved_RL,
+            "relative_flux_errs": relerrs,
+        }
+        with open(
+            f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_convolved_cleaned.pkl",
+            "wb",
+        ) as handle:
+            pickle.dump(datadict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    if not skip_methods["pixelfit"]:
+        logger.info(PROCESS_NAME, "Writing pixelfit image to fits file")
+        _write_fits_file(
+            forwardmodel,
+            relerrs,
+            configdata,
+            f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_pixelfit.fits",
+        )
+        _write_fits_file(
+            fm_conv,
+            relerrs,
+            configdata,
+            f"{output_dir}/calibrated/{PROCESS_NAME}/{targname}_deconvolved_pixelfit_x_restoringbeam.fits",
+        )
 
     return True
+
+
+if __name__ == "__main__":
+    pass

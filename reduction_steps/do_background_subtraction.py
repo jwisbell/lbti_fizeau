@@ -673,7 +673,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         mean_dark = _load_darks(dark_files)
 
     try:
-        from fits_lizard import subtract_mean_from_list
+        from fits_lizard import subtract_mean_from_listX
 
         if do_up_the_ramp:
             # force the script into python mode since up the ramp fitting

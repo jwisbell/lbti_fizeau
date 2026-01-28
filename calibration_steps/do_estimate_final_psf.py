@@ -6,10 +6,13 @@ Functions to make an emperical psf using the field rotation of the science targe
 Called by lizard_calibrate
 """
 
+from utils.utils import argmax2d
+
 import numpy as np
 from scipy.ndimage import rotate
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
+from astropy.io import fits
 
 from utils.util_logger import Logger
 
@@ -40,6 +43,7 @@ def _mk_emperical_psf(
 
     psf_im -= np.mean(psf_im)
     psf_im /= np.max(psf_im)
+    # need to carefully recenter here based on Gaussian fit?
 
     try:
         rotations = np.load(target_rotations_fname)
@@ -84,6 +88,12 @@ def _mk_emperical_psf(
         f"{output_dir}/plots/{PROCESS_NAME}/psf_estimate_{psfname}_for_{targetname}_{obsdate}.png"
     )
     plt.close()
+
+    hdu = fits.PrimaryHDU(data=psf_estimate)
+    hdul = fits.HDUList([hdu])
+    hdul.writeto(
+        f"{output_dir}/calibrated/{PROCESS_NAME}/psf_estimate_{psfname}_for_{targetname}_{obsdate}.fits"
+    )
 
     return True
 

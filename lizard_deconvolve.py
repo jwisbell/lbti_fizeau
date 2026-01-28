@@ -9,52 +9,43 @@ Each step requires a science target AND a calibrator to previously have been red
 # package imports
 from sys import argv
 import json
+from typing import Dict
 
 # pipeline imports
 
 from utils.utils import create_filestructure
 from utils.util_logger import Logger
-from calibration_steps.do_estimate_final_psf import do_estimate_final_psf
-from calibration_steps.do_flux_calibration import do_flux_calibration
+from calibration_steps.do_deconvolution import do_deconvolution
 
 PROCESS_NAME = "calibration"
 
 
-def wrap_estimate_final_psf(
+def wrap_do_deconvolution(
     configdata: dict,
     target_configdata: dict,
     calib_configdata: dict,
     output_dir: str,
     logger: Logger,
+    configfile: str,
+    skip_methods: Dict[str, bool],
 ):
-    create_filestructure(output_dir, "estimate_final_psf", prefix="calibrated")
-    logger.create_log_file("estimate_final_psf")
-    logger.info(PROCESS_NAME, "Starting process `estimate_final_psf`")
-    if not do_estimate_final_psf(
-        configdata, target_configdata, calib_configdata, logger
+    create_filestructure(output_dir, "deconvolution", prefix="calibrated")
+    logger.create_log_file("deconvolution")
+    logger.info(PROCESS_NAME, "Starting process `do_deconvolution`")
+    if not do_deconvolution(
+        configdata,
+        target_configdata,
+        calib_configdata,
+        logger,
+        configfile,
+        skip_methods=skip_methods,
     ):
-        logger.error(PROCESS_NAME, "Process `estimate_final_psf` failed")
+        logger.error(PROCESS_NAME, "Process `do_deconvolution` failed")
         exit()
-    logger.info(PROCESS_NAME, "Process `estimate_final_psf` finished successfully")
+    logger.info(PROCESS_NAME, "Process `do_deconvolution` finished successfully")
 
 
-def wrap_do_flux_calibration(
-    configdata: dict,
-    target_configdata: dict,
-    calib_configdata: dict,
-    output_dir: str,
-    logger: Logger,
-):
-    create_filestructure(output_dir, "flux_calibration", prefix="calibrated")
-    logger.create_log_file("flux_calibration")
-    logger.info(PROCESS_NAME, "Starting process `do_flux_calibration`")
-    if not do_flux_calibration(configdata, target_configdata, calib_configdata, logger):
-        logger.error(PROCESS_NAME, "Process `do_flux_calibration` failed")
-        exit()
-    logger.info(PROCESS_NAME, "Process `do_flux_calibration` finished successfully")
-
-
-def calibrate(configfile):
+def deconvolve(configfile, skip_clean=False, skip_rl=False, skip_pixelfit=False):
     with open(configfile, "r") as inputfile:
         configdata = json.load(inputfile)
 
@@ -82,16 +73,19 @@ def calibrate(configfile):
 
     logger.info(
         PROCESS_NAME,
-        f"Starting calibration of {target_configdata['target']} with {calib_configdata['target']}",
+        f"Starting deconvolution of {target_configdata['target']} with {calib_configdata['target']}",
     )
     logger.info(PROCESS_NAME, f"Results will be put into directory {output_dir}")
 
-    wrap_estimate_final_psf(
-        configdata, target_configdata, calib_configdata, output_dir, logger
-    )
-
-    wrap_do_flux_calibration(
-        configdata, target_configdata, calib_configdata, output_dir, logger
+    # TODO: rotation video within convolution script
+    wrap_do_deconvolution(
+        configdata,
+        target_configdata,
+        calib_configdata,
+        output_dir,
+        logger,
+        configfile,
+        skip_methods={"clean": skip_clean, "rl": skip_rl, "pixelfit": skip_pixelfit},
     )
 
 
@@ -102,4 +96,4 @@ if __name__ == "__main__":
         print("No config file specified. Please specify a config file")
         exit()
 
-    calibrate(configfile)
+    deconvolve(configfile)
