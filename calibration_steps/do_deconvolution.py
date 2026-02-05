@@ -203,6 +203,7 @@ def do_clean(
     negstop=False,
     phat=0.0,
     resulting_im=None,
+    absolute=True,
 ):
     k = 0
     im_0 = np.copy(dirty_im)
@@ -225,7 +226,7 @@ def do_clean(
     else:
         threshold = -1
     while k < n_iter:  # and delta > 1e-8:
-        pk_y, pk_x = find_max_loc(im_i)
+        pk_y, pk_x = find_max_loc(im_i, absolute=absolute)
 
         if abs(im_i[pk_y, pk_x]) < threshold:
             reason = f"threshold ({k} iter)"
@@ -244,7 +245,7 @@ def do_clean(
             delta  # im_i[pk_x, pk_y] #* gain #np.max([im_i[pk_x, pk_y] * gain ,0])
         )
         # iterations.append([new_im, np.copy(resulting_im), delta]) #keep track of how things evolve
-        assert np.abs(im_i[pk_y, pk_x]) == np.max(np.abs(im_i)), "what???"
+        # assert np.abs(im_i[pk_y, pk_x]) == np.max(np.abs(im_i)), "what???"
         if negstop:
             if delta < 0:
                 break
@@ -458,6 +459,10 @@ def wrap_clean(
         angle = float(configdata["clean_beam"]["rot"])
         phat = float(configdata["clean_phat"])
         try:
+            absolute = bool(configdata["clean_use_absolute"])
+        except KeyError:
+            absolute = True
+        try:
             threshold = float(configdata["clean_threshold"])
         except TypeError:
             threshold = -1
@@ -500,6 +505,7 @@ def wrap_clean(
             negstop=False,
             phat=phat,
             resulting_im=resulting_im,
+            absolute=absolute,
         )
 
         mygauss = gauss(
@@ -709,7 +715,7 @@ def wrap_clean(
                 f"Current values-- niter:{n_iter:0f}\tgain:{gain:.7f}\tphat:{phat:.2f}",
             )
             command = input(
-                "Change clean parameters ('niter XX', 'gain XX', 'phat XX', 'continue XXX', 'reset', 'automatic XX'), 'help' or 'okay':\t"
+                "Change clean parameters ('niter XX', 'gain XX', 'phat XX', 'continue XXX', 'reset', 'automatic XX', absolute (True|False), 'help' or 'okay':\t"
             )
             if command == "okay":
                 do_save = input("Save your parameters? (y | n): ")
@@ -788,7 +794,16 @@ def wrap_clean(
                     im_to_clean = np.copy(dirty_im)
                     resulting_im = None
                 except SyntaxError as e:
-                    logger.warn(PROCESS_NAME, f"Could not parse phat value: {e}")
+                    logger.warn(PROCESS_NAME, f"Could not parse 'phat' value: {e}")
+            elif "absolute" in command:
+                try:
+                    tmp = command.split()[-1] == "True"  # bool(command.split()[-1])
+                    absolute = tmp
+                    print(f"Setting 'absolute={tmp}'")
+                    im_to_clean = np.copy(dirty_im)
+                    resulting_im = None
+                except SyntaxError as e:
+                    logger.warn(PROCESS_NAME, f"Could not parse 'absolute' value: {e}")
             else:
                 print(f"Command not recognized: '{command}'")
 

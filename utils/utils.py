@@ -34,17 +34,17 @@ def imshift(im, y, x):
     return np.roll(temp_im, wy - y, axis=0)
 
 
-def find_max_loc(im, do_median=False):
+def find_max_loc(im, do_median=False, absolute=True):
     # find the x,y coords of peak of 2d array
-    # w = im.shape[0]
-    # temp_im = np.copy(im)[w//2-w//4:w//2+w//4,w//2-w//4:w//2+w//4]
     temp_im = np.copy(im)
     if do_median:
         temp_im = median_filter(im, 3)
-    idx = np.argmax(np.abs(temp_im))
-    # idx  = np.argmax(im )
+
+    idx = np.argmax(temp_im)
+    if absolute:
+        idx = np.argmax(np.abs(temp_im))
+
     y, x = np.unravel_index(idx, im.shape)
-    # x, y = argmax2d(np.abs(temp_im))
     return y, x
 
 

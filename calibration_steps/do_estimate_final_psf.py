@@ -92,7 +92,8 @@ def _mk_emperical_psf(
     hdu = fits.PrimaryHDU(data=psf_estimate)
     hdul = fits.HDUList([hdu])
     hdul.writeto(
-        f"{output_dir}/calibrated/{PROCESS_NAME}/psf_estimate_{psfname}_for_{targetname}_{obsdate}.fits"
+        f"{output_dir}/calibrated/{PROCESS_NAME}/psf_estimate_{psfname}_for_{targetname}_{obsdate}.fits",
+        overwrite=True,
     )
 
     return True
