@@ -11,10 +11,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import PowerNorm
 import pickle
-from scipy.ndimage import rotate, median_filter
+from scipy.ndimage import rotate, median_filter, center_of_mass, shift
 from glob import glob
 from utils.util_logger import Logger
-from utils.utils import argmax2d
+from utils.utils import argmax2d, nanmedian_filter
+from astropy.io import fits
+from astropy.modeling import models, fitting
 
 PROCESS_NAME = "corotate"
 
@@ -80,14 +82,13 @@ def _plot_cycles(
 
     for k, key in enumerate(imdict.keys()):
         ims = imdict[key]["ims"]
-        rotim, _, _ = recenter(np.mean(ims, 0))
+        rotim, _, _ = recenter(np.nanmean(ims, 0))
         # rotim = np.mean(ims, 0)
-
         ax = axarr.flatten()[k]
 
         ax.imshow(rotim, origin="lower", norm=PowerNorm(0.5))
         # ax.scatter(rotim.shape[0] // 2, rotim.shape[1] // 2, marker="x", color="r")
-        ax.set_title(f"Cycle {k+1}")
+        ax.set_title(f"Cycle {k + 1}")
     plt.tight_layout()
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_all_cycles_rotated.png")
     plt.close()
@@ -142,6 +143,7 @@ def _process_rotations(
         cims = background_subtracted_frames[key]
 
         rotations = all_rotations[f"{key}"]
+
         # cc_vals = info["correlation_vals"]
         mask = info["mask"]
         if use_phase:
@@ -153,6 +155,7 @@ def _process_rotations(
         temp_imarr = []
         temp_rotarr = []
         temp_unrotarr = []
+        temp_experimental = []
 
         for i, cim in enumerate(cims):
             if mask[i] == 1:
@@ -163,12 +166,26 @@ def _process_rotations(
                 new_im = np.roll(new_im, -shiftsx[i], axis=1)
                 new_im = np.roll(new_im, -shiftsy[i], axis=0)
 
+                new_im, _, _ = recenter(new_im, method="gaussian")
+
                 # rotate to North
                 pa = rotations[i]
-                rotim = rotate(new_im, -pa, reshape=False, mode="nearest")
+                # have to remove nans otherwise this returns all nan image
+                rotim = rotate(
+                    np.nan_to_num(new_im), -pa, reshape=False, mode="nearest"
+                )
+
+                # EXPERIMENTAL -- keep only the highest resolution part
+                new_im_masked = np.copy(np.nan_to_num(new_im))
+                middle = new_im_masked.shape[0] // 2
+                new_im_masked[: middle - 1, :] = 0
+                new_im_masked[middle + 1 :, :] = 0
+                rotim_masked = rotate(new_im_masked, -pa, reshape=False, mode="nearest")
+
                 temp_imarr.append(rotim)
                 temp_rotarr.append(pa)
                 temp_unrotarr.append(new_im)
+                temp_experimental.append(rotim_masked)
 
                 # unrotated_ims.append(new_im)
                 # properly_rotated_ims.append(rotim)
@@ -176,23 +193,64 @@ def _process_rotations(
         temp_imarr = np.array(temp_imarr)
         temp_rotarr = np.array(temp_rotarr)
         temp_unrotarr = np.array(temp_unrotarr)
+        temp_experimental = np.array(temp_experimental)
         # temp_imarr = temp_imarr[mask]
         # temp_rotarr = temp_rotarr[mask]
 
         proper_rotations[f"{key}"]["ims"] = np.copy(temp_imarr)
         proper_rotations[f"{key}"]["rots"] = np.copy(temp_rotarr)
         proper_rotations[f"{key}"]["centered_unrot"] = np.copy(temp_unrotarr)
+        proper_rotations[f"{key}"]["experimental"] = np.copy(temp_experimental)
         del cims
     return proper_rotations
 
 
-def recenter(im):
-    x, y = argmax2d(median_filter(im, 3))
+def recenter(im, method="median_filter"):
+    h, w = im.shape
+    yc, xc = h // 2, w // 2
+    if method == "median_filter":
+        x, y = argmax2d(nanmedian_filter(im, 3))
+        new_im = np.roll(im, im.shape[1] // 2 - x, axis=1)
+        new_im = np.roll(new_im, im.shape[0] // 2 - y, axis=0)
+        return new_im, im.shape[1] // 2 - x, im.shape[0] // 2 - y
 
-    new_im = np.roll(im, im.shape[1] // 2 - x, axis=1)
-    new_im = np.roll(new_im, im.shape[0] // 2 - y, axis=0)
+    elif method == "center_of_mass":
+        # Calculate intensity-weighted average position
+        # Note: COM returns (row, col) which is (y, x)
+        y_obs, x_obs = center_of_mass(im)
 
-    return new_im, im.shape[1] // 2 - x, im.shape[0] // 2 - y
+    elif method == "gaussian":
+        # 1. Create a coordinate grid
+        y, x = np.mgrid[:h, :w]
+
+        # 2. Initialize the model (guessing amplitude and mean from data)
+        # Using COM or Argmax as a starting point makes the fit much more stable
+        y_init, x_init = center_of_mass(im)
+        g_init = models.Gaussian2D(
+            amplitude=np.nanmax(im),
+            x_mean=x_init,
+            y_mean=y_init,
+            x_stddev=1.0,  # update!!!
+            y_stddev=1.0,
+        )
+
+        # 3. Perform the fit
+        fit_g = fitting.LevMarLSQFitter()
+        g = fit_g(g_init, x, y, im)
+
+        x_obs, y_obs = g.x_mean.value, g.y_mean.value
+
+    else:
+        return im, 0, 0
+
+    # Calculate shifts
+    dx = xc - x_obs
+    dy = yc - y_obs
+
+    # For Gaussian, you usually want sub-pixel precision:
+    new_im = shift(im, (dy, dx), mode="constant", cval=0)
+
+    return new_im, dx, dy
 
 
 def do_image_corotation(config: dict, mylogger: Logger) -> bool:
@@ -278,10 +336,15 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     sum_std = 0
     count = 0
     all_rotated = []
-    for _, entry in rotation_dict.items():
+    for nod, entry in rotation_dict.items():
         # for some reason these need to be recentered again
         centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
         centered_unrot, x, y = recenter(np.sum(entry["centered_unrot"], 0))
+        # EXPERIMENTAL
+        np.save(
+            f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_nod{nod}_slices.npy",
+            np.array(entry["experimental"]),
+        )
 
         if remove_bad_pixels:
             centered_rot, _ = bad_pixel_correction.identify_bad_pixels(centered_rot)
@@ -400,9 +463,14 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
         output_dir = config["output_dir"]
         skips = config["skips"]
         extraction_size = config["sub_window"]
+        obsdate = config["obsdate"]
     except KeyError as e:
         logger.error(PROCESS_NAME, f"Key missing from config: {e}")
         return False
+    try:
+        save_fits = config["save_fits"]
+    except KeyError:
+        save_fits = False
 
     # 1. Load the data
     # 1a - load the background subtracted frames
@@ -448,8 +516,8 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     all_rotated = []
     for _, entry in rotation_dict.items():
         # for some reason these need to be recentered again
-        centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
-        centered_unrot, x, y = recenter(np.sum(entry["centered_unrot"], 0))
+        centered_rot, _, _ = recenter(np.nansum(entry["ims"], 0))
+        centered_unrot, x, y = recenter(np.nansum(entry["centered_unrot"], 0))
         sum_rotated += centered_rot
         sum_unrotated += centered_unrot
         sum_std += np.roll(
@@ -523,4 +591,15 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
         f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_unrotated_stacked_psf.npy",
         psf_unrotated_percentiles,
     )
+
+    if save_fits:
+        hdu = fits.PrimaryHDU(data=stacked_rotated_im)
+        hdul = fits.HDUList([hdu])
+        process_path = f"intermediate/{PROCESS_NAME}/"
+        print("Saving fits file")
+        hdul.writeto(
+            f"{output_dir}/{process_path}/{target}_rotated_stacked_{obsdate}.fits",
+            overwrite=True,
+        )
+
     return True

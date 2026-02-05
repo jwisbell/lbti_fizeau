@@ -25,6 +25,7 @@ PROCESS_NAME = "pipeline"
 
 def wrap_bkg_subtraction(output_dir, configdata, logger):
     create_filestructure(output_dir, "bkg_subtraction")
+    create_filestructure(output_dir, "headers")
     logger.create_log_file("bkg_subtraction")
     logger.info(PROCESS_NAME, "Starting process `do_bkg_subtraction`")
     if not do_bkg_subtraction(configdata, logger):

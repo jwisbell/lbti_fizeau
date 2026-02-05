@@ -11,6 +11,7 @@ import numpy as np
 from scipy.ndimage import rotate
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
+from astropy.io import fits
 
 from utils.util_logger import Logger
 from utils.utils import imshift
@@ -68,6 +69,82 @@ def bpm_test():
     assert np.sum(bpm) == 2, f"Bad pixel map failed at sum. Got {np.sum(bpm)}, want {2}"
 
     return 1
+
+
+def correct_image_after_bpm(masked_image, skip=False):
+    # find each bad pixel and replace with the median of its neighbors
+    # what do we do about the edges? (skip?)
+
+    # zero_locations = []
+    # for i in range(len(masked_image)):
+    #     for j in range(len(masked_image[i])):
+    #         if masked_image[i, j] == 0:
+    #             zero_locations.append((i, j))
+    if skip:
+        return masked_image
+
+    zero_locations = np.where(masked_image == 0)
+
+    corrected_image = np.copy(masked_image)
+
+    for i in range(len(zero_locations[0])):
+        # p1 | p2 | p3
+        # p4 | 0  | p6
+        # p7 | p8 | p9
+        loc = (zero_locations[0][i], zero_locations[1][i])
+
+        # vals = []
+        # for x in range(max(0, loc[0] - 1), min(loc[0] + 2, masked_image.shape[0])):
+        #     for y in range(max(0, loc[1] - 1), min(loc[1] + 2, masked_image.shape[1])):
+        #         if x == loc[0] and y == loc[1]:
+        #             continue
+        #
+        #         if masked_image[x, y] == 0:
+        #             continue
+        #
+        #         vals.append(masked_image[x, y])
+
+        vals = masked_image[
+            max(0, loc[0] - 1) : min(loc[0] + 2, masked_image.shape[0]),
+            max(0, loc[1] - 1) : min(loc[1] + 2, masked_image.shape[0]),
+        ]
+        vals[vals == 0] = np.nan
+        corrected_image[loc[0], loc[1]] = np.nanmedian(vals)
+    return corrected_image
+
+
+def apply_bad_pixel_mask(bpm, bkg_sub_ims, skip=False):
+    # actually apply the bad pixel mask
+    # input npm is a binary mask (True means good pixel, False means bad pixel)
+    # ensure that all bad pixels are marked as np.nan for easier processing later
+    if skip:
+        return bkg_sub_ims
+
+    masked_ims = [bpm * x for x in bkg_sub_ims]
+    return masked_ims
+
+
+def load_bpm(im_hdr):
+    # loads the bad pixel map
+    # TODO: load this from a specified location
+    hdu = fits.open("./bpm.fits")
+    bpm = hdu[0].data[4].astype("bool")
+    bpm = ~bpm
+
+    # bpm[~bpm] = np.nan
+
+    # print(bpm.shape)  # should be 2048x2048
+    try:
+        # get the proper readout region with desired shape
+        x1 = int(im_hdr["SUBSECX1"]) - 1
+        x2 = int(im_hdr["SUBSECX2"]) - 1
+        y1 = int(im_hdr["SUBSECY1"]) - 1
+        y2 = int(im_hdr["SUBSECY2"]) - 1
+
+        bpm_window = bpm[y1 : y2 + 1, x1 : x2 + 1]
+        return bpm_window
+    except KeyError:
+        return bpm
 
 
 if __name__ == "__main__":

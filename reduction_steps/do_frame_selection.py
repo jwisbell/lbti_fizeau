@@ -14,9 +14,9 @@ from matplotlib.colors import PowerNorm
 import pickle
 from scipy.ndimage import zoom
 from glob import glob
-from sklearn.cluster import KMeans
 from utils.utils import argmax2d, gauss
 from utils.util_logger import Logger
+import polars as pl
 
 
 PROCESS_NAME = "frame_selection"
@@ -259,7 +259,11 @@ def _frame_centering_and_selection(
     # this is for using a small window
     if not use_full_window:
         cutout_loc = np.copy(centroid_positions[nod])
-        cutout_loc[0] = cutout_loc[0]
+        print(cutout_loc)
+        max_loc = bg_subtracted_frames[nod][0].shape[0]
+        cutout_loc[0] = np.clip(cutout_loc[0], 32, max_loc - 32)
+        cutout_loc[1] = np.clip(cutout_loc[1], 32, max_loc - 32)
+        print(cutout_loc)
         window_size = custom_window_size
 
     ###############################################################################
@@ -467,6 +471,30 @@ def _frame_centering_and_selection(
             info_dict["fourier"]["mask"] = phase_mask
             pickle.dump(info_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
+        # update the header dataframe?
+        with open(
+            f"{output_dir}/intermediate/headers/{target}_header_df_nod{nod}.pkl", "rb"
+        ) as f:
+            polars_df = pickle.load(f)
+
+            # add the mask column
+            phase_mask = phase_mask
+            polars_df = polars_df.with_columns(pl.Series("phase_mask", phase_mask))
+            percentile_mask = other_info["mask"]
+            polars_df = polars_df.with_columns(
+                pl.Series("percentile_mask", percentile_mask)
+            )
+
+            # add the phase column
+            phase_values = phase_info["central"]
+            polars_df = polars_df.with_columns(pl.Series("central_phase", phase_values))
+
+            with open(
+                f"{output_dir}/intermediate/headers/{target}_header_df_nod{nod}.pkl",
+                "wb",
+            ) as f:
+                pickle.dump(polars_df, f)
+
     return recovered_psf, correlation_vals, corrected_ims, other_info
 
 
@@ -657,6 +685,7 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
             continue
         if "bkg" in name or "off" in name:
             continue
+        # TODO: read almost all of this from the dataframes
         cent = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
         )
@@ -666,6 +695,7 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
         rotations[name] = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
         )
+
         bg_subtracted_frames[name] = bkgsubtracted_ims
         centroid_positions[name] = cent
 
@@ -726,6 +756,8 @@ def do_frame_selection_sd(config: dict, mylogger: Logger) -> bool:
             continue
         if "bkg" in name or "off" in name:
             continue
+
+        # TODO: read almost all of this from the dataframe
         cent = np.load(
             f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
         )
