@@ -91,7 +91,7 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
     # mask[s[-int(len(s) * keep_fraction) :]] = 1
     logger.info(
         PROCESS_NAME,
-        f"The SNR of the frames after cc is {np.percentile(snr, [50-34,50,50+34])}",
+        f"The SNR of the frames after cc is {np.percentile(snr, [50 - 34, 50, 50 + 34])}",
     )
 
     return (
@@ -196,10 +196,10 @@ def _mk_model_psf(mode="fiz"):
     model = np.zeros((size, size))  # (extraction_size,extraction_size))
     xv, yv = np.meshgrid(np.arange(-size / 2, size / 2), np.arange(-size / 2, size / 2))
 
-    if mode == "fiz":
+    if mode.lower() == "fiz" or mode.lower() == "fizeau":
         model = add_circle(model, size // 2 - 9, size // 2, 6.5)
         model = add_circle(model, size // 2 + 9, size // 2, 6.5)
-    elif mode == "singledish":
+    elif mode.lower() == "singledish" or mode.lower() == "ao":
         model = add_circle(model, size // 2, size // 2, 8.5)
 
     """
@@ -411,7 +411,7 @@ def _frame_centering_and_selection(
         if not do_offset:
             break
 
-    phase_info, vis_info, phase_mask = _calc_phase_info(
+    phase_info, vis_info, phase_mask, flux_info = _calc_phase_info(
         corrected_ims, output_dir, target, nod, mask, instrument
     )
     # TODO: update the mask to use the phase info?
@@ -426,7 +426,7 @@ def _frame_centering_and_selection(
     )
     logger.info(
         PROCESS_NAME,
-        f"Using |fourier phase| <{np.pi/4:.2f} keeps {np.sum(phase_mask)}/{len(phase_mask)} frames",
+        f"Using |fourier phase| <{np.pi / 4:.2f} keeps {np.sum(phase_mask)}/{len(phase_mask)} frames",
     )
 
     if use_phase:
@@ -488,6 +488,15 @@ def _frame_centering_and_selection(
             # add the phase column
             phase_values = phase_info["central"]
             polars_df = polars_df.with_columns(pl.Series("central_phase", phase_values))
+            polars_df = polars_df.with_columns(
+                pl.Series("correlation_vals", correlation_vals)
+            )
+            polars_df = polars_df.with_columns(
+                pl.Series("flux_peak", flux_info["peak"])
+            )
+            polars_df = polars_df.with_columns(
+                pl.Series("flux_noise", flux_info["noise"])
+            )
 
             with open(
                 f"{output_dir}/intermediate/headers/{target}_header_df_nod{nod}.pkl",
@@ -502,6 +511,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
     # for each corrected im, calculate the phase information and return it
     # we have the central phase, delta up-down and delta left-right
     phase_dict = {"central": [], "ud": [], "lr": []}
+    flux_dict = {"peak": [], "noise": []}
     vis_dict = {"central": []}  # keep the visibility value too, why not
     gridsize = cims[0].shape[0]  # extraction_size
 
@@ -530,6 +540,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         # now to extract the values properly
         xc = 3
         yc = cim.shape[0] // 2 + 1
+        c = cim.shape[0] // 2
         locs = {
             "center": (xc, yc),
             "top": (xc, yc + distance),
@@ -539,6 +550,8 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
         }
 
         phase_dict["central"].append(phase[locs["center"][1], locs["center"][0]])
+        flux_dict["peak"].append(cim[c, c])
+        flux_dict["noise"].append(np.std(cim[: c // 4, : c // 4]))
         vis_dict["central"].append(amp[locs["center"][1], locs["center"][0]])
         phase_dict["ud"].append(
             phase[locs["top"][1], locs["top"][0]]
@@ -642,7 +655,7 @@ def _calc_phase_info(cims, output_dir, target, nod, mask, instrument):
     plt.savefig(f"{output_dir}/plots/{PROCESS_NAME}/{target}_nod{nod}_phasedist.png")
     plt.close()
 
-    return phase_dict, vis_dict, phase_mask
+    return phase_dict, vis_dict, phase_mask, flux_dict
 
 
 def do_frame_selection(config: dict, mylogger: Logger) -> bool:
@@ -735,6 +748,7 @@ def do_frame_selection_sd(config: dict, mylogger: Logger) -> bool:
         skips = config["skips"]
         CUTOFF_FRACTION = config["cutoff_fraction"]
         psfname = config["psfname"]
+        mode = config["mode"]
     except KeyError as e:
         logger.error(PROCESS_NAME, f"Key missing from config: {e}")
         return False
@@ -773,7 +787,7 @@ def do_frame_selection_sd(config: dict, mylogger: Logger) -> bool:
     # do all frames for actual processing
     for key in bg_subtracted_frames:
         logger.info(PROCESS_NAME, f"Processing nod {key}...")
-        mypsf = _mk_model_psf(mode="singledish")
+        mypsf = _mk_model_psf(mode=mode)
         if psfname != "model":
             mypsf = empirical_psf
         _frame_centering_and_selection(

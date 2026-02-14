@@ -22,6 +22,8 @@ import pickle
 import os
 from astropy.stats import sigma_clip
 import numexpr as ne
+from utils.utils import create_filestructure
+from typing import Tuple, Dict
 
 from calibration_steps.bad_pixel_correction import (
     correct_image_after_bpm,
@@ -121,15 +123,15 @@ def _fix_gain(image):
     channel_width = 64
     channel_region = 50
     for xstart in np.arange(0, image.shape[0] + channel_width, channel_width):
-        region_top = image[0:channel_region, xstart : xstart + channel_width]
-        region_bot = image[-channel_region:, xstart : xstart + channel_width]
+        region_top = image[4:channel_region, xstart : xstart + channel_width]
+        region_bot = image[-channel_region:4, xstart : xstart + channel_width]
         # fig, (ax, bx) = plt.subplots(1, 2)
         # ax.imshow(region_top)
         # bx.imshow(region_bot)
         # plt.show()
         # plt.close()
-        channel_val = np.mean([np.median(region_top), np.median(region_bot)])
-        new_image[:, xstart : xstart + channel_width] -= channel_val
+        channel_val = np.nanmax([np.nanmedian(region_top), np.nanmedian(region_bot)])
+        # new_image[:, xstart : xstart + channel_width] -= channel_val
 
     return new_image
 
@@ -248,6 +250,7 @@ def _load_fits_files(
     nods,
     prefix,
     skipkeys=[],
+    output_dir="",
     ramp_params: dict = {"idx": -1, "subtract_min": False},
     do_up_the_ramp=False,
     mean_dark=0.0,
@@ -260,6 +263,12 @@ def _load_fits_files(
     fnames = {}
     timestamps = {}
     all_headers = {}
+    if do_up_the_ramp:
+        # create the directory to save fits files in
+        create_filestructure(
+            output_dir, "ramp_fits", prefix="intermediate/bkg_subtraction"
+        )
+
     # TODO: can this be sped up using multiprocess?
     for name, entry in nods.items():
         if name in skipkeys:
@@ -302,7 +311,19 @@ def _load_fits_files(
                             if ramp_params["subtract_min"]:
                                 im -= x[0].data[0]
                             if do_up_the_ramp:
-                                im = _ramp_fitting(x[0].data, do_plot=False)
+                                im: np.ndarray = (
+                                    _ramp_fitting(x[0].data, do_plot=False) - mean_dark
+                                )
+                                # TODO: save the ramp-fitted file in the format Jordan wants
+                                lmir_im_fmt = np.zeros(shape=(2, 2048, 2048))
+                                lmir_im_fmt[1] = im
+                                new_hdu = fits.PrimaryHDU(
+                                    data=lmir_im_fmt, header=x[0].header
+                                )
+                                hdul = fits.HDUList([new_hdu])
+                                hdul.writeto(
+                                    f"{output_dir}/intermediate/bkg_subtraction/ramp_fits/{filename.split('/')[-1].split('.fit')[0]}_ramp.fits"
+                                )
 
                     temp.append(_extract_window(im, entry["position"]))
                     # temp.append(im)
@@ -327,6 +348,106 @@ def _load_fits_files(
 
         logger.info(PROCESS_NAME, f"\t Done! Mean PA {np.mean(pas[name])}")
     return images, pas, fnames, timestamps, all_headers
+
+
+def _load_fits_sum(
+    fdir,
+    entry,
+    nod_key,
+    prefix,
+    output_dir="",
+    ramp_params: dict = {"idx": -1, "subtract_min": False},
+    do_up_the_ramp=False,
+    mean_dark=0.0,
+    mean_bkg: np.ndarray = np.zeros((1)),
+    save_intermediate=False,
+) -> Tuple[np.ndarray, list]:
+    # for each nod position open the files
+    # extract a box of size `aperture size` nod position in each file
+
+    headers = []
+
+    if do_up_the_ramp:
+        # create the directory to save fits files in
+        create_filestructure(
+            output_dir, "ramp_fits", prefix="intermediate/bkg_subtraction"
+        )
+    elif save_intermediate:
+        create_filestructure(
+            output_dir, "bkg_subtracted_images", prefix="intermediate/bkg_subtraction"
+        )
+
+    logger.info(PROCESS_NAME, f"Loading nod {nod_key}")
+    filenames = [
+        f"{fdir}{prefix}{str(i).zfill(6)}.fits"
+        for i in range(entry["start"], entry["end"] + 1)
+    ]
+    logger.info(PROCESS_NAME, f"\t {len(filenames)} files")
+
+    # Check if we are dealing with fits or fits.gz
+    test_fname = filenames[np.random.randint(0, len(filenames))]
+    if os.path.exists(test_fname):
+        print("Using uncompressed target files")
+    else:
+        print(
+            "Using compressed target files (*fits.gz) -- NOTE: this takes longer to process"
+        )
+        filenames = [
+            f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz"
+            for i in range(entry["start"], entry["end"] + 1)
+        ]
+
+    start = time.time()
+    im_sum = 0.0
+    for filename in filenames:
+        try:
+            with fits.open(filename) as x:
+                im = np.copy(x[0].data) - mean_dark - mean_bkg
+                if len(x[0].data.shape) > 2:
+                    im = np.copy(x[0].data[ramp_params["idx"]])
+                    if instrument != "NOMIC":
+                        im = (
+                            np.copy(x[0].data[ramp_params["idx"]])
+                            - mean_dark
+                            - mean_bkg
+                        )
+                        # subtracting out the "zero" exposure to remove bad pixels
+                        if ramp_params["subtract_min"]:
+                            im -= x[0].data[0]
+                        if do_up_the_ramp:
+                            im: np.ndarray = (
+                                _ramp_fitting(x[0].data, do_plot=False)
+                                - mean_dark
+                                - mean_bkg
+                            )
+                            # TODO: save the ramp-fitted file in the format Jordan wants
+                            lmir_im_fmt = np.zeros(shape=(2, 2048, 2048))
+                            lmir_im_fmt[1] = im
+                            new_hdu = fits.PrimaryHDU(
+                                data=lmir_im_fmt, header=x[0].header
+                            )
+                            hdul = fits.HDUList([new_hdu])
+                            hdul.writeto(
+                                f"{output_dir}/intermediate/bkg_subtraction/ramp_fits/{filename.split('/')[-1].split('.fit')[0]}_ramp.fits"
+                            )
+                im_sum += im
+                headers.append({k: v for k, v in x[0].header.items()})
+                # optionall save the intermediate files individually
+                # TODO: write wrapper function
+                if save_intermediate:
+                    new_hdu = fits.PrimaryHDU(data=im, header=x[0].header)
+                    hdul = fits.HDUList([new_hdu])
+                    hdul.writeto(
+                        f"{output_dir}/intermediate/bkg_subtraction/bkg_subtracted_images/{filename.split('/')[-1].split('.fit')[0]}_bkgsub.fits"
+                    )
+        except FileNotFoundError as e:
+            logger.warn(PROCESS_NAME, f"\t\t {filename} failed, {e}")
+            continue
+        except OSError as e:
+            print(filename)
+            continue
+    print(f"Took {time.time() - start:.1f} seconds")
+    return np.array(im_sum), headers
 
 
 def _window_background_subtraction(im_arr, background, window_center):
@@ -364,10 +485,11 @@ def _qa_plots(bg_subtracted_frames, centroid_positions, timestamps, output_dir, 
         if "bkg" in key or "off" in key:
             continue
         _ = plt.figure()
+        im = (np.mean(bg_subtracted_frames[key][:], 0),)
         plt.imshow(
-            np.mean(bg_subtracted_frames[key][:], 0),
+            im,
             origin="lower",
-            norm=PowerNorm(0.5),
+            norm=PowerNorm(0.5, vmin=-0.05 * np.max(im), vmax=0.90 * np.max(im)),
             interpolation="gaussian",
         )
         plt.scatter(centroid_positions[key][0], centroid_positions[key][1])
@@ -488,6 +610,58 @@ def _get_filenames(data_dir, prefix, start_fn, end_fn, sub_start_fn, sub_end_fn)
     return obj_files, bkg_files
 
 
+def _efficient_bkg_subtraction(
+    nod_info,
+    data_dir,
+    prefix,
+    skips,
+    ramp_params,
+    output_dir,
+    process_path,
+    target,
+    save_fits=False,
+    config=None,
+    do_up_the_ramp=False,
+    skip_bpm=False,
+    mean_dark=0.0,
+):
+    for key in nod_info.keys():
+        if key in skips:
+            continue
+        headers = []
+
+        # 1. Compute the mean background
+        summed_bkg, bkg_headers = _load_fits_sum(
+            data_dir,
+            nod_info[key],
+            key,
+            prefix,
+            output_dir=output_dir,
+            ramp_params=ramp_params,
+            do_up_the_ramp=do_up_the_ramp,
+            mean_dark=mean_dark,
+            mean_bkg=0.0,
+        )
+        mean_bkg = summed_bkg / len(bkg_headers)
+
+        # 2. Do the background subtraction and save the intermediate file as fits
+        summed_im, headers = _load_fits_sum(
+            data_dir,
+            nod_info[key],
+            key,
+            prefix,
+            output_dir=output_dir,
+            ramp_params=ramp_params,
+            do_up_the_ramp=do_up_the_ramp,
+            mean_dark=mean_dark,
+            mean_bkg=mean_bkg,
+            save_intermediate=False,
+        )
+        mean_im = summed_im / len(headers)
+
+        # TODO: finish this and save everything in the expected format
+
+
 def _old_bkg_subtraction(
     nod_info,
     data_dir,
@@ -524,6 +698,7 @@ def _old_bkg_subtraction(
             nod_info,
             prefix,
             skipkeys=temp_skips,
+            output_dir=output_dir,
             ramp_params=ramp_params,
             do_up_the_ramp=do_up_the_ramp,
             mean_dark=mean_dark,
@@ -581,6 +756,9 @@ def _old_bkg_subtraction(
             #    centroid_positions[key] = nod_info[key]["position"]
 
             # TODO: put almost all of this in the dataframe
+            if "bkg" in key or "off" in key:
+                continue
+
             np.save(
                 f"{output_dir}/{process_path}/{target}_centroid-positions_cycle{key}.npy",
                 [np.argmax(np.nansum(im, 0)), np.argmax(np.nansum(im, 1))],
@@ -597,9 +775,6 @@ def _old_bkg_subtraction(
                 f"{output_dir}/{process_path}/{target}_timestamps_cycle{key}.npy",
                 timestamps[key],
             )  # save the time stamps of the background-subtracted frames
-
-            if "bkg" in key or "off" in key:
-                continue
 
             polars_df = _merge_headers_to_df(hdr_dicts[key], key)
             # Save the DataFrame to a pickle file
@@ -670,23 +845,21 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         dark_files, _ = _get_filenames(
             data_dir, prefix, dark_file_range[0], dark_file_range[1], 0, 0
         )
+        print(dark_files)
         mean_dark = _load_darks(dark_files)
 
     try:
-        from fits_lizard import subtract_mean_from_listX
+        from fits_lizard import subtract_mean_from_list
 
         if do_up_the_ramp:
             # force the script into python mode since up the ramp fitting
             # not yet working in the rust package
             raise AssertionError
 
-        bg_subtracted_frames = {}
-        rotations = {}
-        timestamps = {}
-
         # 1. For each key collect the _filenames_ to be loaded for both the key and for the sub_key
+        centroid_positions = {}
         for key, value in nod_info.items():
-            if "off" in key or "bkg" in key or "skip" in key:
+            if "off" in key or "bkg" in key or "skip" in key or key in skips:
                 continue
 
             logger.info(PROCESS_NAME, f"Doing background subtraction for key {key}")
@@ -704,7 +877,12 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             # 2. Calculate the bg_subtracted_frames for that key
             start = time.time()
             result = subtract_mean_from_list(
-                obj_files, bkg_files, do_up_the_ramp, ramp_params["subtract_min"]
+                obj_files,
+                bkg_files,
+                False,
+                ramp_params["subtract_min"],
+                value["position"],
+                extraction_size,
             )  # returns images, rotations, julian dates
             bkg_sub_ims = [x[0] - 2 * mean_dark for x in result[0]]
             rots = [x[1] for x in result[0]]
@@ -714,7 +892,11 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             polars_df = _merge_headers_to_df(hdr_dicts, key)
             print(f"Took {time.time() - start:.1f} seconds")
 
+            if "bkg" in key or "off" in key:
+                continue
+
             # Save the DataFrame to a pickle file
+            print("Saving merged headers")
             with open(
                 f"{output_dir}/intermediate/headers/{target}_header_df_nod{key}.pkl",
                 "wb",
@@ -723,39 +905,43 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
 
             # 2.5 apply the bad pixel map
             # 2.5.a. load the bad pixel map
+            print("Loading bad pixel map and cropping to cutout size")
             bpm = load_bpm(hdr_dicts[0])
-
-            # 2.5.b. multiply the images by the bpm
-            masked_images = apply_bad_pixel_mask(bpm, bkg_sub_ims, skip=skip_bpm)
+            cropped_bpm = _extract_window(bpm, value["position"])
 
             # 3. Crop each frame to the right size
-            cropped_ims = [
-                _extract_window(im, value["position"]) for im in masked_images
-            ]
+            print("Cropping bkg. subbed images image")
+            # cropped_ims = [_extract_window(im, value["position"]) for im in bkg_sub_ims]
+            cropped_ims = np.array(bkg_sub_ims)
 
-            # 3a Correct the bad pixels with the median of the neighbors
-            corrected_ims = [
-                correct_image_after_bpm(im, skip=skip_bpm) for im in cropped_ims
-            ]
+            # 4. multiply the images by the bpm
+            print("Applying bad pixel mask")
+            masked_images = apply_bad_pixel_mask(
+                cropped_bpm, cropped_ims, skip=skip_bpm
+            )
+
+            # 4a Correct the bad pixels with the median of the neighbors
+            print("Correcting bad pixels in cropped image")
+            # corrected_ims = [
+            #     correct_image_after_bpm(im, skip=skip_bpm) for im in masked_images
+            # ]
+            corrected_ims = list(
+                map(lambda x: correct_image_after_bpm(x, skip_bpm), masked_images)
+            )
+
+            # TODO: fix this so everything clears out each iteration...
+            # Huge memory issue
+            # From here down
 
             # 4. Save the cropped frames in the bg_subtracted_frames dict
-            bg_subtracted_frames[key] = np.array(corrected_ims)
-            rotations[key] = np.array(rots)
-            timestamps[key] = np.array(times)
+            # bg_subtracted_frames[key] = np.array(corrected_ims)
+            # rotations[key] = np.array(rots)
+            # timestamps[key] = np.array(times)
 
-            # optionally save as fits files
-            if save_fits:
-                _savefits(corrected_ims, key, hdr_dicts, config, process_path)
-
-        # save the background-subtracted sub-windows in processed data folder
-        centroid_positions = {}
-
-        for key in bg_subtracted_frames.keys():
-            x = bg_subtracted_frames[key]
             logger.info(PROCESS_NAME, f"Saving/plotting key {key}")
             # if "bkg" in key or "off" in key:
             # continue
-            im = np.sum(bg_subtracted_frames[key], 0)
+            im = np.sum(corrected_ims, 0)
             im = median_filter(im, 5)
             centroid_positions[key] = [
                 np.clip(np.argmax(np.nansum(im, 0)), 32, len(im) - 32),
@@ -772,28 +958,34 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             )
             np.save(
                 f"{output_dir}/{process_path}/{target}_rotations_cycle{key}.npy",
-                rotations[key],
+                np.array(rots),
             )
             # save the background-subtracted frames
             np.save(
-                f"{output_dir}/{process_path}/{target}_bkg-subtracted_cycle{key}.npy", x
+                f"{output_dir}/{process_path}/{target}_bkg-subtracted_cycle{key}.npy",
+                corrected_ims,
             )
 
             np.save(
                 f"{output_dir}/{process_path}/{target}_timestamps_cycle{key}.npy",
-                timestamps[key],
+                np.array(times),
             )  # save the time stamps of the background-subtracted frames
-        # do the plotting
-        try:
-            _qa_plots(
-                bg_subtracted_frames,
-                centroid_positions,
-                timestamps,
-                output_dir,
-                target,
-            )
-        except Exception as e:
-            logger.error(PROCESS_NAME, f"_qa_plots failed due to {e}")
+
+            # optionally save as fits files
+            if save_fits:
+                _savefits(corrected_ims, key, hdr_dicts, config, process_path)
+
+            # do the plotting
+            try:
+                _qa_plots(
+                    {key: corrected_ims},
+                    centroid_positions,
+                    {key: np.array(times)},
+                    output_dir,
+                    target,
+                )
+            except Exception as e:
+                logger.error(PROCESS_NAME, f"_qa_plots failed due to {e}")
 
     except (ModuleNotFoundError, ImportError, AssertionError) as e:
         logger.warn(

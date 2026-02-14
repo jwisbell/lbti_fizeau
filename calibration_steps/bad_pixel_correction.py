@@ -121,6 +121,8 @@ def apply_bad_pixel_mask(bpm, bkg_sub_ims, skip=False):
         return bkg_sub_ims
 
     masked_ims = [bpm * x for x in bkg_sub_ims]
+    masked_ims_test = np.multiply(bpm, bkg_sub_ims)
+    print(len(masked_ims), masked_ims_test.shape)
     return masked_ims
 
 
