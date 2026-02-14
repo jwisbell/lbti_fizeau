@@ -60,7 +60,7 @@ def wrap_image_corotation_sd(output_dir, configdata, logger):
     logger.info(PROCESS_NAME, "Process `do_image_corotation` finished successfully")
 
 
-def reduce(configfile: str):
+def reduce(configfile: str, skip_bkg: bool = True):
     with open(configfile, "r") as inputfile:
         configdata = json.load(inputfile)
 
@@ -77,12 +77,13 @@ def reduce(configfile: str):
     )
     logger.info(PROCESS_NAME, f"Results will be put into directory {output_dir}")
 
-    wrap_bkg_subtraction(output_dir, configdata, logger)
+    if not skip_bkg:
+        wrap_bkg_subtraction(output_dir, configdata, logger)
     wrap_frame_selection(output_dir, configdata, logger)
     wrap_image_corotation(output_dir, configdata, logger)
 
 
-def singledish(configfile: str):
+def singledish(configfile: str, skip_bkg: bool = False):
     with open(configfile, "r") as inputfile:
         configdata = json.load(inputfile)
 
@@ -99,7 +100,8 @@ def singledish(configfile: str):
     )
     logger.info(PROCESS_NAME, f"Results will be put into directory {output_dir}")
 
-    wrap_bkg_subtraction(output_dir, configdata, logger)
+    if not skip_bkg:
+        wrap_bkg_subtraction(output_dir, configdata, logger)
     wrap_frame_selection(output_dir, configdata, logger)
     wrap_image_corotation_sd(output_dir, configdata, logger)
 

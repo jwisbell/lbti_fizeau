@@ -137,6 +137,7 @@ def _process_rotations(
     w = extraction_size // 2
     proper_rotations = {}
     unrotated_ims = []
+    print("got this far")
     for key, info in infos.items():
         logger.info(PROCESS_NAME, f"Processing key {key}")
         # cims = np.copy(info["corrected_ims"])
@@ -148,6 +149,8 @@ def _process_rotations(
         mask = info["mask"]
         if use_phase:
             mask = info["fourier"]["mask"]
+        print(f"Mask returns {np.sum(mask)}/{len(cims)}")
+
         shiftsx = info["shiftsx"]
         shiftsy = info["shiftsy"]
         proper_rotations[f"{key}"] = {"ims": [], "rots": []}
@@ -166,7 +169,7 @@ def _process_rotations(
                 new_im = np.roll(new_im, -shiftsx[i], axis=1)
                 new_im = np.roll(new_im, -shiftsy[i], axis=0)
 
-                new_im, _, _ = recenter(new_im, method="gaussian")
+                new_im, _, _ = recenter(new_im, method="median_filter")
 
                 # rotate to North
                 pa = rotations[i]
@@ -267,6 +270,7 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
         output_dir = config["output_dir"]
         skips = config["skips"]
         extraction_size = config["sub_window"]
+        obsdate = config["obsdate"]
     except KeyError as e:
         logger.error(PROCESS_NAME, f"Key missing from config: {e}")
         return False
@@ -275,7 +279,10 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
         use_phase = config["use_phase"]
     except KeyError:
         use_phase = False
-
+    try:
+        save_fits = config["save_fits"]
+    except KeyError:
+        save_fits = False
     try:
         remove_bad_pixels = config["estimate_bad_pixels"]
     except KeyError:
@@ -446,6 +453,16 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
         f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_unrotated_stacked_psf.npy",
         psf_unrotated_percentiles,
     )
+
+    if save_fits:
+        hdu = fits.PrimaryHDU(data=stacked_rotated_im)
+        hdul = fits.HDUList([hdu])
+        process_path = f"intermediate/{PROCESS_NAME}/"
+        print("Saving fits file")
+        hdul.writeto(
+            f"{output_dir}/{process_path}/{target}_rotated_stacked_{obsdate}.fits",
+            overwrite=True,
+        )
     return True
 
 
@@ -472,6 +489,7 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     except KeyError:
         save_fits = False
 
+    print("loading files")
     # 1. Load the data
     # 1a - load the background subtracted frames
     background_subtracted_frames, centroid_positions, all_rotations = (
@@ -482,15 +500,36 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     # 1b - load the recentering info from prev step
     datadir = f"{output_dir}/intermediate/bkg_subtraction/"
     num_files = len(glob(f"{datadir}/{target}*subtracted*cycle*.npy"))
+    # 1b - load the recentering info from prev step
+
+    datadir2 = f"{output_dir}/intermediate/frame_selection/"
+    info_files = np.sort(
+        glob(f"{datadir2}/{target}_fs_info_cycle*.pk")
+    )  # [f"{datadir}/{target}_fs_info_cycle{i+1}.pk" for i in range(num_files)]
+
+    # infos = {}
+    # for k, entry in background_subtracted_frames.items():
+    #     if "off" in k or "bkg" in k:
+    #         continue
+    #     infos[k] = {}
+    #     infos[k]["mask"] = np.array([True for _ in entry])
+    #     infos[k]["shiftsx"] = np.array([0 for _ in entry])
+    #     infos[k]["shiftsy"] = np.array([0 for _ in entry])
 
     infos = {}
-    for k, entry in background_subtracted_frames.items():
-        if "off" in k or "bkg" in k:
-            continue
-        infos[k] = {}
-        infos[k]["mask"] = np.array([True for _ in entry])
-        infos[k]["shiftsx"] = np.array([0 for _ in entry])
-        infos[k]["shiftsy"] = np.array([0 for _ in entry])
+    for i_f in info_files:
+        try:
+            with open(i_f, "rb") as handle:
+                info = pickle.load(handle)
+                cycle_num = i_f.split(".pk")[0].split("cycle")[-1]
+                if cycle_num in skips:
+                    continue
+                infos[cycle_num] = info
+        except FileNotFoundError:
+            logger.warn(
+                PROCESS_NAME,
+                f"The file {i_f} was not found -- this nod position was likely skipped!",
+            )
 
     # 2. for each individual image,
     # apply shifts
@@ -502,6 +541,7 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
         all_rotations,
         extraction_size,
     )
+    print("ran the function")
     # print(len(properly_rotated_ims), len(properly_rotated_ims) / 58)
     # _ = input("continue?")
 
@@ -514,7 +554,10 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     sum_std = 0
     count = 0
     all_rotated = []
-    for _, entry in rotation_dict.items():
+    for key, entry in rotation_dict.items():
+        print(key, "here???")
+        if key in skips:
+            continue
         # for some reason these need to be recentered again
         centered_rot, _, _ = recenter(np.nansum(entry["ims"], 0))
         centered_unrot, x, y = recenter(np.nansum(entry["centered_unrot"], 0))

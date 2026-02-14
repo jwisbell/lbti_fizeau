@@ -22,6 +22,11 @@ def main():
     # Command: reduce
     reduce_parser = subparsers.add_parser("reduce", help="Reduce the data")
     reduce_parser.add_argument("config", help="Path to the reduction config file")
+    reduce_parser.add_argument(
+        "--skip_bkg",
+        action="store_true",
+        help="Skip the background subtraction to use a previous result",
+    )
 
     # Command: calibrate
     calibrate_parser = subparsers.add_parser(
@@ -70,6 +75,8 @@ def main():
             skip_rl=args.skip_rl,
             skip_pixelfit=args.skip_pixelfit,
         )
+    elif args.command == "reduce":
+        reduce(args.config, skip_bkg=args.skip_bkg)
     else:
         tasks[args.command](args.config)
 
