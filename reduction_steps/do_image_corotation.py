@@ -137,7 +137,6 @@ def _process_rotations(
     w = extraction_size // 2
     proper_rotations = {}
     unrotated_ims = []
-    print("got this far")
     for key, info in infos.items():
         logger.info(PROCESS_NAME, f"Processing key {key}")
         # cims = np.copy(info["corrected_ims"])
@@ -489,7 +488,6 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     except KeyError:
         save_fits = False
 
-    print("loading files")
     # 1. Load the data
     # 1a - load the background subtracted frames
     background_subtracted_frames, centroid_positions, all_rotations = (
@@ -541,7 +539,6 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
         all_rotations,
         extraction_size,
     )
-    print("ran the function")
     # print(len(properly_rotated_ims), len(properly_rotated_ims) / 58)
     # _ = input("continue?")
 
@@ -555,7 +552,6 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
     count = 0
     all_rotated = []
     for key, entry in rotation_dict.items():
-        print(key, "here???")
         if key in skips:
             continue
         # for some reason these need to be recentered again
