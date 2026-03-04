@@ -21,9 +21,9 @@ import polars as pl
 import pickle
 import os
 from astropy.stats import sigma_clip
-import numexpr as ne
 from utils.utils import create_filestructure
 from typing import Tuple, Dict
+import warnings
 
 from calibration_steps.bad_pixel_correction import (
     correct_image_after_bpm,
@@ -83,36 +83,41 @@ def _load_darks(filenames):
     return mean_dark / len(filenames)
 
 
-def _fast_fit_slope(imgcube):
+def _fast_fit_slope_np(imgcube):
     # Mask NaN and Inf values
     imgcube = np.ma.masked_invalid(imgcube)
 
+    n_time, n_rows, n_cols = imgcube.shape
+
     # Create time vector (starting from 1)
-    time = np.arange(imgcube.shape[0], dtype=np.float64) + 1
+    time = np.arange(n_time, dtype=np.float64) + 1
 
-    # Prepare shape for broadcasting
-    tshape = tuple(np.roll(imgcube.shape, -1))
+    # Build design matrix [time, 1] for slope + intercept
+    A = np.column_stack([time, np.ones(n_time)])  # shape (n_time, 2)
 
-    # Core precomputed quantities
-    time_reshaped = np.transpose(np.resize(time, tshape), (2, 0, 1))
-    time_sq_reshaped = np.transpose(np.resize(np.square(time), tshape), (2, 0, 1))
+    # Reshape imgcube from (n_time, n_rows, n_cols) → (n_time, n_rows*n_cols)
+    b = imgcube.reshape(n_time, -1).astype(np.float64)  # shape (n_time, n_pixels)
 
-    Sx = np.ma.array(time_reshaped).sum(axis=0, dtype=np.float64)
-    Sxx = np.ma.array(time_sq_reshaped).sum(axis=0, dtype=np.float64)
-    Sy = np.ma.mean(imgcube, axis=0, dtype=np.float64)
-    Sxsx = Sx * Sx
-    Sxy = (imgcube * time[:, np.newaxis, np.newaxis]).sum(axis=0, dtype=np.float64)
-    n = np.ma.count(imgcube, axis=0)
+    # Replace masked values with NaN so lstsq doesn't use them in the fill
+    b = np.ma.filled(b, np.nan)
 
-    # Apply regression formula (NaN-safe due to masked arrays)
-    beta = ne.evaluate(
-        "(((Sx / n) * Sy) - (Sxy / n)) / (((Sxsx / (n * n))) - (Sxx / n))"
-    )
-    alpha = ne.evaluate("Sy - (beta * (Sx / n))")
+    # Find columns (pixels) with any NaN
+    nan_mask = np.any(np.isnan(b), axis=0)  # shape (n_pixels,)
+    valid_cols = ~nan_mask
 
-    # Fill masked values (if desired)
-    beta = np.ma.filled(beta, np.nan)
-    alpha = np.ma.filled(alpha, np.nan)
+    # Solve only on valid (non-NaN) pixels
+    beta_flat = np.full(n_rows * n_cols, np.nan)
+    alpha_flat = np.full(n_rows * n_cols, np.nan)
+
+    if valid_cols.any():
+        x, _, _, _ = np.linalg.lstsq(A, b[:, valid_cols], rcond=None)
+        # x shape: (2, n_valid_pixels) — row 0 = slopes, row 1 = intercepts
+        beta_flat[valid_cols] = x[0]
+        alpha_flat[valid_cols] = x[1]
+
+    # Reshape back to (n_rows, n_cols)
+    beta = beta_flat.reshape(n_rows, n_cols)
+    alpha = alpha_flat.reshape(n_rows, n_cols)
 
     return beta, alpha
 
@@ -121,17 +126,20 @@ def _fix_gain(image):
     # for each channel (spaced by XX pixels), find the median value of the top 100 and bottom 100 pixels and subtract out
     new_image = np.copy(image)
     channel_width = 64
-    channel_region = 50
+    channel_region = 100
+    skip_pixels = 5
     for xstart in np.arange(0, image.shape[0] + channel_width, channel_width):
-        region_top = image[4:channel_region, xstart : xstart + channel_width]
-        region_bot = image[-channel_region:4, xstart : xstart + channel_width]
-        # fig, (ax, bx) = plt.subplots(1, 2)
-        # ax.imshow(region_top)
-        # bx.imshow(region_bot)
-        # plt.show()
-        # plt.close()
-        channel_val = np.nanmax([np.nanmedian(region_top), np.nanmedian(region_bot)])
-        # new_image[:, xstart : xstart + channel_width] -= channel_val
+        region_top = image[skip_pixels:channel_region, xstart : xstart + channel_width]
+        region_bot = image[
+            -channel_region:-skip_pixels, xstart : xstart + channel_width
+        ]
+        channel_val = np.nanmax(
+            [
+                np.nanmedian(sigma_clip(region_top)),
+                np.nanmedian(sigma_clip(region_bot)),
+            ]
+        )
+        new_image[:, xstart : xstart + channel_width] -= channel_val
 
     return new_image
 
@@ -154,7 +162,11 @@ def _ramp_fitting(im_arr, spacing=1, do_plot=False, full_fit=False):
         pass
 
     alpha = np.zeros(im_arr[0].shape)
-    beta, alpha = _fast_fit_slope(delta_ims)
+    # beta, alpha = _fast_fit_slope(delta_ims)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        warnings.simplefilter("ignore", UserWarning)
+        beta, alpha = _fast_fit_slope_np(delta_ims)
 
     if do_plot:
         fig, ax = plt.subplots()
@@ -198,7 +210,10 @@ def _ramp_fitting(im_arr, spacing=1, do_plot=False, full_fit=False):
         plt.close()
 
     # additionally subtract out the channel biases (due to gain)
-    corrected_im = _fix_gain(beta * len(im_arr) + alpha * 0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        warnings.simplefilter("ignore", UserWarning)
+        corrected_im = _fix_gain(beta * len(im_arr) + alpha * 0)
     return corrected_im
 
 
@@ -288,10 +303,11 @@ def _load_fits_files(
         # Check if we are dealing with fits or fits.gz
         test_fname = filenames[np.random.randint(0, len(filenames))]
         if os.path.exists(test_fname):
-            print("Using uncompressed target files")
+            logger.info(PROCESS_NAME, "\t Using uncompressed target files")
         else:
-            print(
-                "Using compressed target files (*fits.gz) -- NOTE: this takes longer to process"
+            logger.info(
+                PROCESS_NAME,
+                "\t Using compressed target files (*fits.gz) -- NOTE: this takes longer to process",
             )
             filenames = [
                 f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz"
@@ -311,6 +327,9 @@ def _load_fits_files(
                             if ramp_params["subtract_min"]:
                                 im -= x[0].data[0]
                             if do_up_the_ramp:
+                                logger.info(
+                                    PROCESS_NAME, f"\t\t Ramp fitting on {filename}"
+                                )
                                 im: np.ndarray = (
                                     _ramp_fitting(x[0].data, do_plot=False) - mean_dark
                                 )
@@ -322,7 +341,8 @@ def _load_fits_files(
                                 )
                                 hdul = fits.HDUList([new_hdu])
                                 hdul.writeto(
-                                    f"{output_dir}/intermediate/bkg_subtraction/ramp_fits/{filename.split('/')[-1].split('.fit')[0]}_ramp.fits"
+                                    f"{output_dir}/intermediate/bkg_subtraction/ramp_fits/{filename.split('/')[-1].split('.fit')[0]}_ramp.fits",
+                                    overwrite=True,
                                 )
 
                     temp.append(_extract_window(im, entry["position"]))
@@ -337,7 +357,7 @@ def _load_fits_files(
                 logger.warn(PROCESS_NAME, f"\t\t {filename} failed, {e}")
                 continue
             except OSError as e:
-                print(filename)
+                print(filename, e)
                 continue
         print(f"Took {time.time() - start:.1f} seconds")
         images[name] = temp
@@ -428,7 +448,8 @@ def _load_fits_sum(
                             )
                             hdul = fits.HDUList([new_hdu])
                             hdul.writeto(
-                                f"{output_dir}/intermediate/bkg_subtraction/ramp_fits/{filename.split('/')[-1].split('.fit')[0]}_ramp.fits"
+                                f"{output_dir}/intermediate/bkg_subtraction/ramp_fits/{filename.split('/')[-1].split('.fit')[0]}_ramp.fits",
+                                overwrite=True,
                             )
                 im_sum += im
                 headers.append({k: v for k, v in x[0].header.items()})
@@ -485,7 +506,7 @@ def _qa_plots(bg_subtracted_frames, centroid_positions, timestamps, output_dir, 
         if "bkg" in key or "off" in key:
             continue
         _ = plt.figure()
-        im = (np.mean(bg_subtracted_frames[key][:], 0),)
+        im = np.mean(bg_subtracted_frames[key][:], 0)
         plt.imshow(
             im,
             origin="lower",
@@ -505,7 +526,7 @@ def _qa_plots(bg_subtracted_frames, centroid_positions, timestamps, output_dir, 
     plt.title("mean flux")
     for key in bg_subtracted_frames.keys():
         plt.plot(
-            [t for t in timestamps[key]],
+            # [t for t in timestamps[key]],
             [np.nanmean(x) for x in bg_subtracted_frames[key]],
             label=key,
         )
@@ -545,7 +566,7 @@ def _parse_config(config):
         )
 
     try:
-        skip_bpm = config["skip_bpm_correction"]
+        skip_bpm = config["skip_bpm"]
     except KeyError:
         skip_bpm = False  # do bad pixel correction by default
 
@@ -716,35 +737,42 @@ def _old_bkg_subtraction(
         # multiply the BPM with each image
         bg_subtracted_frames = {}
         for key in ims.keys():
-            bpm = load_bpm(hdr_dicts[key][0])
+            if "bkg" in key or "off" in key:
+                continue
 
-            bkg_subbed = [
-                im - backgrounds[nod_info[key]["subtract"]]["mean"] for im in ims[key]
-            ]
-            # 2.5.b. multiply the images by the bpm
-            bpm_windowed = _extract_window(bpm, nod_info[key]["position"])
-            masked_images = apply_bad_pixel_mask(
-                bpm_windowed, bkg_subbed, skip=skip_bpm
-            )
+            try:
+                bpm = load_bpm(hdr_dicts[key][0])
 
-            # 3 Correct the bad pixels with the median of the neighbors
-            corrected_ims = [
-                correct_image_after_bpm(im, skip=skip_bpm) for im in masked_images
-            ]
-            bg_subtracted_frames[key] = np.array(corrected_ims)
+                bkg_subbed = [
+                    im - backgrounds[nod_info[key]["subtract"]]["mean"]
+                    for im in ims[key]
+                ]
+                # 2.5.b. multiply the images by the bpm
+                bpm_windowed = _extract_window(bpm, nod_info[key]["position"])
+                masked_images = apply_bad_pixel_mask(
+                    bpm_windowed, bkg_subbed, skip=skip_bpm
+                )
 
-            # optionally save as fits files
-            if save_fits:
-                _savefits(corrected_ims, key, hdr_dicts[key], config, process_path)
+                # 3 Correct the bad pixels with the median of the neighbors
+                corrected_ims = [
+                    correct_image_after_bpm(im, skip=skip_bpm) for im in masked_images
+                ]
+                bg_subtracted_frames[key] = np.array(corrected_ims)
+
+                # optionally save as fits files
+                if save_fits:
+                    _savefits(corrected_ims, key, hdr_dicts[key], config, process_path)
+            except IndexError:
+                print(f"Expected {len(ims[key])} headers. Got {len(hdr_dicts[key])}")
 
         # save the background-subtracted sub-windows in processed data folder
         centroid_positions = {}
 
         for key in bg_subtracted_frames.keys():
+            if "bkg" in key or "off" in key:
+                continue
             x = bg_subtracted_frames[key]
             logger.info(PROCESS_NAME, f"Processing key {key}")
-            # if "bkg" in key or "off" in key:
-            # continue
             im = np.sum(bg_subtracted_frames[key], 0)
             im = median_filter(im, 5)
             centroid_positions[key] = [
@@ -752,8 +780,8 @@ def _old_bkg_subtraction(
                 np.clip(np.argmax(np.nansum(im, 1)), 32, len(im) - 32),
             ]
             print(centroid_positions)
-            # if extraction_size >= ims[key][0].shape[0]:
-            #    centroid_positions[key] = nod_info[key]["position"]
+            if extraction_size >= ims[key][0].shape[0] or extraction_size <= 0:
+                centroid_positions[key] = nod_info[key]["position"]
 
             # TODO: put almost all of this in the dataframe
             if "bkg" in key or "off" in key:
@@ -849,7 +877,8 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         mean_dark = _load_darks(dark_files)
 
     try:
-        from fits_lizard import subtract_mean_from_list
+        from fits_lizard import subtract_mean_from_listX
+        # TODO: this doesn't handle nans well
 
         if do_up_the_ramp:
             # force the script into python mode since up the ramp fitting

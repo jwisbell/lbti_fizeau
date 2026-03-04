@@ -5,3 +5,5 @@ numpy
 matplotlib
 scikit-image
 scikit-learn
+torch 
+polars 
