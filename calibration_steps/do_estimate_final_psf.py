@@ -41,8 +41,8 @@ def _mk_emperical_psf(
         logger.info(PROCESS_NAME, f"File {psf_calib_fname} not found")
         return False
 
-    psf_im -= np.mean(psf_im)
-    psf_im /= np.max(psf_im)
+    psf_im -= np.nanmean(psf_im)
+    psf_im /= np.nanmax(psf_im)
     # need to carefully recenter here based on Gaussian fit?
 
     try:
@@ -52,7 +52,8 @@ def _mk_emperical_psf(
         return False
 
     rotated_psfs = [
-        rotate(psf_im, -pa, reshape=False, mode="nearest") for pa in rotations
+        rotate(np.nan_to_num(psf_im), -pa, reshape=False, mode="nearest")
+        for pa in rotations
     ]
     logger.info(PROCESS_NAME, f"The mean postition angle is {np.mean(rotations)}")
     logger.info(

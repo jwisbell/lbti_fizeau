@@ -41,24 +41,27 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
             continue
         if "bkg" in name or "off" in name:
             continue
-        bkgsubtracted_ims = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
-        )
-        bg_subtracted_frames[name] = bkgsubtracted_ims
-        if "m" in name:
-            msum += np.sum(bkgsubtracted_ims)
-            mcount += len(bkgsubtracted_ims)
-        else:
-            lsum += np.sum(bkgsubtracted_ims)
-            lcount += len(bkgsubtracted_ims)
-        cent = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
-        )
-        centroid_positions[name] = cent
+        try:
+            bkgsubtracted_ims = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
+            )
+            bg_subtracted_frames[name] = bkgsubtracted_ims
+            if "m" in name:
+                msum += np.sum(bkgsubtracted_ims)
+                mcount += len(bkgsubtracted_ims)
+            else:
+                lsum += np.sum(bkgsubtracted_ims)
+                lcount += len(bkgsubtracted_ims)
+            cent = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
+            )
+            centroid_positions[name] = cent
 
-        rotations[name] = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
-        )
+            rotations[name] = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
+            )
+        except FileNotFoundError:
+            continue
 
     """
     ratio = 2.227264280094873  # (msum / mcount) / (lsum / lcount)
@@ -82,7 +85,12 @@ def _plot_cycles(
 
     for k, key in enumerate(imdict.keys()):
         ims = imdict[key]["ims"]
-        rotim, _, _ = recenter(np.nanmean(ims, 0))
+        if len(ims < 1):
+            continue
+        try:
+            rotim, _, _ = recenter(np.nanmean(ims, 0))
+        except ValueError:
+            continue
         # rotim = np.mean(ims, 0)
         ax = axarr.flatten()[k]
 
@@ -168,6 +176,7 @@ def _process_rotations(
                 new_im = np.roll(new_im, -shiftsx[i], axis=1)
                 new_im = np.roll(new_im, -shiftsy[i], axis=0)
 
+                # TODO: make this work better for an object like Io?
                 new_im, _, _ = recenter(new_im, method="median_filter")
 
                 # rotate to North
@@ -343,27 +352,32 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     count = 0
     all_rotated = []
     for nod, entry in rotation_dict.items():
-        # for some reason these need to be recentered again
-        centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
-        centered_unrot, x, y = recenter(np.sum(entry["centered_unrot"], 0))
-        # EXPERIMENTAL
-        np.save(
-            f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_nod{nod}_slices.npy",
-            np.array(entry["experimental"]),
-        )
+        try:
+            # for some reason these need to be recentered again
+            centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
+            centered_unrot, x, y = recenter(np.sum(entry["centered_unrot"], 0))
+            # EXPERIMENTAL
+            np.save(
+                f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_nod{nod}_slices.npy",
+                np.array(entry["experimental"]),
+            )
 
-        if remove_bad_pixels:
-            centered_rot, _ = bad_pixel_correction.identify_bad_pixels(centered_rot)
-            centered_unrot, _ = bad_pixel_correction.identify_bad_pixels(centered_unrot)
+            if remove_bad_pixels:
+                centered_rot, _ = bad_pixel_correction.identify_bad_pixels(centered_rot)
+                centered_unrot, _ = bad_pixel_correction.identify_bad_pixels(
+                    centered_unrot
+                )
 
-        sum_rotated += centered_rot
-        sum_unrotated += centered_unrot
-        sum_std += np.roll(
-            np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
-        )
-        count += len(entry["ims"])
-        for im in entry["ims"]:
-            all_rotated.append(im)
+            sum_rotated += centered_rot
+            sum_unrotated += centered_unrot
+            sum_std += np.roll(
+                np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
+            )
+            count += len(entry["ims"])
+            for im in entry["ims"]:
+                all_rotated.append(im)
+        except ValueError:
+            continue
     mean_rotated = sum_rotated / count
     mean_unrotated = sum_unrotated / count
     mean_std = sum_std / count
@@ -398,6 +412,13 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     # this is multiple GB, default to not saving
     # df = pd.DataFrame.from_dict(proper_rotations)
     # df.to_pickle(f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_rotated_ims.pkl")
+    #
+    with open(
+        f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_masked_ims_and_rots.pkl",
+        "wb",
+    ) as pkl:
+        pickle.dump(rotation_dict, pkl, protocol=pickle.HIGHEST_PROTOCOL)
+    print("saved???")
 
     print([len(rotation_dict[nod]["rots"]) for nod in rotation_dict])
 

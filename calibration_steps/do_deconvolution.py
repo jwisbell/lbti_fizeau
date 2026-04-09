@@ -8,6 +8,8 @@ Produces the final images and plots to diagnose quality.
 Called by lizard_calibrate
 """
 
+from numpy.typing import NDArray
+
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -26,7 +28,14 @@ import torch
 import torch.nn.functional as F
 
 from utils.util_logger import Logger
-from utils.utils import argmax2d, gauss, imshift, find_max_loc, write_to_fits
+from utils.utils import (
+    argmax2d,
+    gauss,
+    imshift,
+    find_max_loc,
+    write_to_fits,
+    create_filestructure,
+)
 from calibration_steps.bad_pixel_correction import identify_bad_pixels as bp_corr
 
 PROCESS_NAME = "deconvolution"
@@ -124,6 +133,7 @@ def fit_gauss(psf_est, level=0.0):
     data = np.copy(psf_est)
     cut = level * np.max(data)
     data -= cut
+    data = np.nan_to_num(data)
     data[data < 0] = 0
 
     x0 = [5, 5, 0]
@@ -195,20 +205,20 @@ def _do_psf_subtraction(targ_image, psf_image, configdata, targname, calibname):
 
 
 def do_clean(
-    dirty_im,
-    psf_estimate,
-    n_iter,
-    gain=1e-4,
-    threshold=1e-6,
-    negstop=False,
-    phat=0.0,
-    resulting_im=None,
-    absolute=True,
+    dirty_im: NDArray[np.float64],
+    psf_estimate: NDArray[np.float64],
+    n_iter: float,
+    gain: float = 1e-4,
+    threshold: float = 1e-6,
+    negstop: bool = False,
+    phat: float = 0.0,
+    resulting_im: NDArray[np.float64] = np.zeros(1),
+    absolute: bool = True,
 ):
     k = 0
     im_0 = np.copy(dirty_im)
     im_i = np.copy(im_0)
-    if resulting_im is None:
+    if resulting_im == np.zeros(1):
         resulting_im = np.zeros(im_0.shape)
 
     beam = np.copy(psf_estimate)
@@ -819,8 +829,10 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target, skip=False):
     if skip:
         return None
     try:
-        niter = int(configdata["rl_niter"])
-        eps = float(configdata["rl_eps"])
+        niterval = int(configdata["rl_niter"])
+        epsval = float(configdata["rl_eps"])
+        nitervals = [niterval]
+        epsvals = [epsval]
     except KeyError as e:
         logger.error(
             PROCESS_NAME,
@@ -828,93 +840,128 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target, skip=False):
         )
         return None
 
+    try:
+        do_gridsearch = int(configdata["rl_do_gridsearch"])
+    except KeyError as e:
+        do_gridsearch = False
     gamma = 0.5
 
     normalized_psf = psf_estimate / np.sum(psf_estimate)
 
-    deconvolved_RL = restoration.richardson_lucy(
-        dirty_im, normalized_psf, num_iter=niter, filter_epsilon=eps, clip=False
-    )
+    if do_gridsearch:
+        nitervals = [4, 8, 16, 32, 64, 128, 256] + nitervals
+        epsvals = [1e-1, 5e-2, 1e-2, 5e-3, 1e-3, 5e-4, 1e-4] + epsvals
 
-    xv, yv = np.meshgrid(
-        np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
-    )
+    returned_val = None
+    for niter in nitervals:
+        for eps in epsvals:
+            deconvolved_RL = restoration.richardson_lucy(
+                dirty_im, normalized_psf, num_iter=niter, filter_epsilon=eps, clip=False
+            )
+            if niter == niterval and eps == epsval:
+                returned_val = np.copy(deconvolved_RL)
 
-    # start the plotting
-    fig = plt.figure(figsize=(8.5, 4), layout="constrained")
-    gs = GridSpec(1, 3, figure=fig, width_ratios=[0.495, 0.02, 0.495])
-    ax = fig.add_subplot(gs[0])
-    bx = fig.add_subplot(gs[2])
-    cx = fig.add_subplot(gs[1])
+            xv, yv = np.meshgrid(
+                np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
+            )
 
-    cbar_im = ax.imshow(
-        deconvolved_RL,
-        origin="lower",
-        norm=PowerNorm(gamma, vmin=0, vmax=np.max(deconvolved_RL)),
-        interpolation="gaussian",
-        cmap="Spectral_r",
-    )
+            # start the plotting
+            fig = plt.figure(figsize=(8.5, 4), layout="constrained")
+            gs = GridSpec(1, 3, figure=fig, width_ratios=[0.495, 0.02, 0.495])
+            ax = fig.add_subplot(gs[0])
+            bx = fig.add_subplot(gs[2])
+            cx = fig.add_subplot(gs[1])
 
-    levels = np.array(
-        [0.9 / 512, 0.9 / 256, 0.9 / 32, 0.9 / 16, 0.9 / 8, 0.9 / 4, 0.9 / 2, 0.9]
-    ) * np.max(deconvolved_RL)
-    bx.contour(
-        xv,
-        yv,
-        deconvolved_RL,
-        origin="lower",
-        levels=levels,  # np.array([2,3,4,5,10,20,50])*noise,
-        colors="k",
-        norm=PowerNorm(gamma, vmin=0, vmax=np.max(deconvolved_RL)),
-    )
-    bx.set_aspect("equal")
-    ax.set_aspect("equal")
-    ax.set_xticks(xticks[::-1] - 1)
-    ax.set_xticklabels(xticklabels, fontsize="small")
-    ax.set_yticks(xticks - 4)
-    ax.set_yticklabels(yticklabels, fontsize="small")
-    bx.set_xticks(xticks[::-1] - 1)
-    bx.set_xticklabels(xticklabels, fontsize="small")
-    bx.set_yticks(xticks - 4)
-    bx.set_yticklabels(yticklabels, fontsize="small")
-    bx.grid()
-    ax.text(11, 90, r"N", color="white")
-    ax.text(1, 78, r"E", color="white")
-    ax.plot([14, 14], [80, 88], "white")
-    ax.plot([7, 14], [80, 80], "white")
+            cbar_im = ax.imshow(
+                deconvolved_RL,
+                origin="lower",
+                norm=PowerNorm(gamma, vmin=0, vmax=np.max(deconvolved_RL)),
+                interpolation="gaussian",
+                cmap="Spectral_r",
+            )
 
-    bx.text(11, 90, r"N", color="k")
-    bx.text(1, 78, r"E", color="k")
-    bx.plot([14, 14], [80, 88], "k")
-    bx.plot([7, 14], [80, 80], "k")
+            levels = np.array(
+                [
+                    0.9 / 512,
+                    0.9 / 256,
+                    0.9 / 32,
+                    0.9 / 16,
+                    0.9 / 8,
+                    0.9 / 4,
+                    0.9 / 2,
+                    0.9,
+                ]
+            ) * np.max(deconvolved_RL)
+            bx.contour(
+                xv,
+                yv,
+                deconvolved_RL,
+                origin="lower",
+                levels=levels,  # np.array([2,3,4,5,10,20,50])*noise,
+                colors="k",
+                norm=PowerNorm(gamma, vmin=0, vmax=np.max(deconvolved_RL)),
+            )
+            bx.set_aspect("equal")
+            ax.set_aspect("equal")
+            ax.set_xticks(xticks[::-1] - 1)
+            ax.set_xticklabels(xticklabels, fontsize="small")
+            ax.set_yticks(xticks - 4)
+            ax.set_yticklabels(yticklabels, fontsize="small")
+            bx.set_xticks(xticks[::-1] - 1)
+            bx.set_xticklabels(xticklabels, fontsize="small")
+            bx.set_yticks(xticks - 4)
+            bx.set_yticklabels(yticklabels, fontsize="small")
+            bx.grid()
+            ax.text(11, 90, r"N", color="white")
+            ax.text(1, 78, r"E", color="white")
+            ax.plot([14, 14], [80, 88], "white")
+            ax.plot([7, 14], [80, 80], "white")
 
-    ax.set_xlabel(r"$\Delta\alpha$ [arcseconds]", fontsize="small")
-    ax.set_ylabel(r"$\Delta\delta$ [arcseconds]", fontsize="small")
-    cx.axis("off")
+            bx.text(11, 90, r"N", color="k")
+            bx.text(1, 78, r"E", color="k")
+            bx.plot([14, 14], [80, 88], "k")
+            bx.plot([7, 14], [80, 80], "k")
 
-    flux_label = "Flux density [cts/px]"
-    if is_flux_cal:
-        flux_label = "Flux density [mJy/px]"
-    plt.colorbar(
-        cbar_im,
-        ax=cx,
-        label=flux_label,
-        fraction=1.2,
-        shrink=1,
-        location="right",
-        extend="max",
-    )
-    # plt.suptitle(f'N_iter = {n}, eps={eps}')
-    # plt.savefig(f'../plots/fig3.pdf')#deconv_rl_n{n}_eps1e-2_pa{PA}.png')
-    plt.savefig(
-        f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_rl_deconvolution.png"
-    )
-    plt.close()
+            ax.set_xlabel(r"$\Delta\alpha$ [arcseconds]", fontsize="small")
+            ax.set_ylabel(r"$\Delta\delta$ [arcseconds]", fontsize="small")
+            cx.axis("off")
+
+            flux_label = "Flux density [cts/px]"
+            if is_flux_cal:
+                flux_label = "Flux density [mJy/px]"
+            plt.colorbar(
+                cbar_im,
+                ax=cx,
+                label=flux_label,
+                fraction=1.2,
+                shrink=1,
+                location="right",
+                extend="max",
+            )
+            # plt.suptitle(f'N_iter = {n}, eps={eps}')
+            # plt.savefig(f'../plots/fig3.pdf')#deconv_rl_n{n}_eps1e-2_pa{PA}.png')
+            if do_gridsearch:
+                create_filestructure(
+                    configdata["output_dir"], "rl_grid", prefix="plots/deconvolution"
+                )
+
+                power = np.floor(np.log10(eps))
+                prefactor = eps / np.power(10, power)
+                fmteps = f"{prefactor}e{power}"
+                plt.savefig(
+                    f"{configdata['output_dir']}/plots/{PROCESS_NAME}/rl_grid/{target}_rl_deconvolution_eps{fmteps}_niter{niter}.png"
+                )
+
+            if niterval == niter and epsval == eps:
+                plt.savefig(
+                    f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_rl_deconvolution.png"
+                )
+            plt.close()
 
     # save the results
     # np.save(f"{configdata['output_dir']}/calibrated/{PROCESS_NAME}/{target}_RL_deconvolved_n{niter}_eps{eps_str}.npy", deconvolved_RL)
 
-    return deconvolved_RL
+    return returned_val
 
 
 def clean_test(debug=False):

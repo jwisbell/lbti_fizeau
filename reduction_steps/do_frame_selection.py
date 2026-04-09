@@ -24,7 +24,7 @@ logger: Logger = Logger("./")
 
 
 # Function Definitions
-def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
+def _frame_selection_scores_cc(images, true_psf, keep_fraction=0.1, debug=False):
     """
     Function to select frames based on their cross correlation to the reference psf. A fraction `keep_fraction` is used to make up a final, stacked image.
     """
@@ -35,6 +35,7 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
     snr = []
     for temp_im in images:
         im = np.copy(temp_im)
+        psf = np.copy(true_psf)
 
         # renormalize the images
         s = np.nansum(im)
@@ -699,18 +700,21 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
         if "bkg" in name or "off" in name:
             continue
         # TODO: read almost all of this from the dataframes
-        cent = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
-        )
-        bkgsubtracted_ims = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
-        )
-        rotations[name] = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
-        )
+        try:
+            cent = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
+            )
+            bkgsubtracted_ims = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
+            )
+            rotations[name] = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
+            )
 
-        bg_subtracted_frames[name] = bkgsubtracted_ims
-        centroid_positions[name] = cent
+            bg_subtracted_frames[name] = bkgsubtracted_ims
+            centroid_positions[name] = cent
+        except FileNotFoundError:
+            continue
 
     # do all frames for actual processing
     for key in bg_subtracted_frames:
@@ -718,6 +722,13 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
         mypsf = _mk_model_psf(mode=mode)
         if psfname != "model":
             mypsf = empirical_psf
+
+        # handle when a nod is "skipped" because of missing files or improperly formatted config file
+        try:
+            _ = bg_subtracted_frames[key]
+        except KeyError:
+            continue
+
         _frame_centering_and_selection(
             key,
             bg_subtracted_frames,

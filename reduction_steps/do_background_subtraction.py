@@ -62,6 +62,10 @@ def _extract_window(im, center):
     xlower = np.max([0, xc - extraction_size // 2])
     xupper = np.min([im.shape[1], xc + extraction_size // 2])
 
+    if extraction_size % 2 == 1:
+        yupper += 1
+        xupper += 1
+
     return im[ylower:yupper, xlower:xupper]
 
 
@@ -139,7 +143,7 @@ def _fix_gain(image):
                 np.nanmedian(sigma_clip(region_bot)),
             ]
         )
-        new_image[:, xstart : xstart + channel_width] -= channel_val
+        new_image[:, xstart : xstart + channel_width] -= channel_val * 0
 
     return new_image
 
@@ -510,7 +514,7 @@ def _qa_plots(bg_subtracted_frames, centroid_positions, timestamps, output_dir, 
         plt.imshow(
             im,
             origin="lower",
-            norm=PowerNorm(0.5, vmin=-0.05 * np.max(im), vmax=0.90 * np.max(im)),
+            norm=PowerNorm(0.5, vmin=-0.05 * np.nanmax(im), vmax=0.90 * np.nanmax(im)),
             interpolation="gaussian",
         )
         plt.scatter(centroid_positions[key][0], centroid_positions[key][1])
@@ -742,6 +746,7 @@ def _old_bkg_subtraction(
 
             try:
                 bpm = load_bpm(hdr_dicts[key][0])
+                print("BPM loaded")
 
                 bkg_subbed = [
                     im - backgrounds[nod_info[key]["subtract"]]["mean"]
@@ -773,15 +778,15 @@ def _old_bkg_subtraction(
                 continue
             x = bg_subtracted_frames[key]
             logger.info(PROCESS_NAME, f"Processing key {key}")
-            im = np.sum(bg_subtracted_frames[key], 0)
-            im = median_filter(im, 5)
+            im = np.median(bg_subtracted_frames[key], 0)
+            im = median_filter(im, 7)
             centroid_positions[key] = [
                 np.clip(np.argmax(np.nansum(im, 0)), 32, len(im) - 32),
                 np.clip(np.argmax(np.nansum(im, 1)), 32, len(im) - 32),
             ]
             print(centroid_positions)
-            if extraction_size >= ims[key][0].shape[0] or extraction_size <= 0:
-                centroid_positions[key] = nod_info[key]["position"]
+            # if extraction_size >= ims[key][0].shape[0] or extraction_size <= 0:
+            #     centroid_positions[key] = nod_info[key]["position"]
 
             # TODO: put almost all of this in the dataframe
             if "bkg" in key or "off" in key:
@@ -789,7 +794,8 @@ def _old_bkg_subtraction(
 
             np.save(
                 f"{output_dir}/{process_path}/{target}_centroid-positions_cycle{key}.npy",
-                [np.argmax(np.nansum(im, 0)), np.argmax(np.nansum(im, 1))],
+                # [np.argmax(np.nansum(im, 0)), np.argmax(np.nansum(im, 1))],
+                centroid_positions[key],
             )
             np.save(
                 f"{output_dir}/{process_path}/{target}_rotations_cycle{key}.npy",
@@ -877,7 +883,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         mean_dark = _load_darks(dark_files)
 
     try:
-        from fits_lizard import subtract_mean_from_listX
+        from fits_lizard import subtract_mean_from_list
         # TODO: this doesn't handle nans well
 
         if do_up_the_ramp:
