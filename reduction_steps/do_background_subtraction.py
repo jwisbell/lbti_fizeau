@@ -258,7 +258,7 @@ def _qa_plots(bg_subtracted_frames, centroid_positions, timestamps, output_dir, 
         if "bkg" in key or "off" in key:
             continue
         _ = plt.figure()
-        im = np.mean(bg_subtracted_frames[key][:], 0)
+        im = np.nanmean(bg_subtracted_frames[key][:], 0)
         plt.imshow(
             im,
             origin="lower",
@@ -384,6 +384,7 @@ def _get_filenames(data_dir, prefix, start_fn, end_fn, sub_start_fn, sub_end_fn)
 
 
 def _minimal_load_file(
+    logger,
     filename,
     ramp_params: dict = {"idx": -1, "subtract_min": False},
     do_up_the_ramp=False,
@@ -402,7 +403,6 @@ def _minimal_load_file(
                     im = np.copy(x[0].data[ramp_params["idx"]]) - mean_dark
                     # subtracting out the "zero" exposure to remove bad pixels
                     if ramp_params["subtract_min"]:
-                        print("should get here!")
                         im -= x[0].data[0]
                     if do_up_the_ramp:
                         logger.info(PROCESS_NAME, f"\t\t Ramp fitting on {filename}")
@@ -452,6 +452,7 @@ def _minimal_load_file(
 
 
 def _load_science_files(
+    logger,
     config,
     key,
     mean_bkg,
@@ -494,6 +495,7 @@ def _load_science_files(
         res = pool.starmap(
             _minimal_load_file,
             zip(
+                repeat(logger),
                 filenames,
                 repeat(ramp_params),
                 repeat(do_up_the_ramp),
@@ -511,7 +513,7 @@ def _load_science_files(
 
 
 def _load_background_files(
-    config, key, fdir, prefix, ramp_params, do_up_the_ramp, mean_dark=0
+    logger, config, key, fdir, prefix, ramp_params, do_up_the_ramp, mean_dark=0
 ):
     sum = 0.0
     n_ims = 0
@@ -543,6 +545,7 @@ def _load_background_files(
         res = pool.starmap(
             _minimal_load_file,
             zip(
+                repeat(logger),
                 filenames,
                 repeat(ramp_params),
                 repeat(do_up_the_ramp),
@@ -599,7 +602,6 @@ def new_improved_bkg_subtraction(config: dict, mylogger: Logger):
         dark_files, _ = _get_filenames(
             data_dir, prefix, dark_file_range[0], dark_file_range[1], 0, 0
         )
-        print(dark_files)
         mean_dark = _load_darks(dark_files)
 
     # Open the full BPM
@@ -607,7 +609,13 @@ def new_improved_bkg_subtraction(config: dict, mylogger: Logger):
 
     centroid_positions = {}
     for key, value in nod_info.items():
-        if "bkg" in key or "off" in key or "skip" in key or "bad" in key:
+        if (
+            "bkg" in key
+            or "off" in key
+            or "skip" in key
+            or "bad" in key
+            or key in skips
+        ):
             continue
 
         bkg_key: str = value["subtract"]
@@ -615,7 +623,14 @@ def new_improved_bkg_subtraction(config: dict, mylogger: Logger):
         # load the background files and return the mean
         start = time.time()
         mean_bkg = _load_background_files(
-            config, bkg_key, data_dir, prefix, ramp_params, do_up_the_ramp, mean_dark
+            logger,
+            config,
+            bkg_key,
+            data_dir,
+            prefix,
+            ramp_params,
+            do_up_the_ramp,
+            mean_dark,
         )
         end = time.time()
         print(
@@ -629,6 +644,7 @@ def new_improved_bkg_subtraction(config: dict, mylogger: Logger):
             times,
             hdr_dicts,
         ) = _load_science_files(
+            logger,
             config,
             key,
             mean_bkg,
@@ -647,9 +663,8 @@ def new_improved_bkg_subtraction(config: dict, mylogger: Logger):
         # do the stats and saving as before
 
         logger.info(PROCESS_NAME, f"Saving/plotting key {key}")
-
-        im = np.sum(bkg_subbed_images, 0)
-        im = median_filter(im, 5)
+        summed_im = np.sum(bkg_subbed_images, 0)
+        im = median_filter(summed_im, 5)
         centroid_positions[key] = [
             np.clip(np.argmax(np.nansum(im, 0)), 32, len(im) - 32),
             np.clip(np.argmax(np.nansum(im, 1)), 32, len(im) - 32),
@@ -657,7 +672,7 @@ def new_improved_bkg_subtraction(config: dict, mylogger: Logger):
 
         np.save(
             f"{output_dir}/{process_path}/{target}_centroid-positions_cycle{key}.npy",
-            [np.argmax(np.nansum(im, 0)), np.argmax(np.nansum(im, 1))],
+            centroid_positions[key],
         )
         np.save(
             f"{output_dir}/{process_path}/{target}_rotations_cycle{key}.npy",
