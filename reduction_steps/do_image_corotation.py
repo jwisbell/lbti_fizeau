@@ -166,7 +166,7 @@ def _process_rotations(
                 new_im = np.roll(new_im, -shiftsx[i], axis=1)
                 new_im = np.roll(new_im, -shiftsy[i], axis=0)
 
-                new_im, _, _ = recenter(new_im, method="gaussian")
+                new_im, _, _ = recenter(new_im, method="median_filter")
 
                 # rotate to North
                 pa = rotations[i]

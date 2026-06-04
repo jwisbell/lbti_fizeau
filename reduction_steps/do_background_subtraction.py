@@ -409,6 +409,11 @@ def _parse_config(config):
         do_up_the_ramp = False
 
     try:
+        skip_bkgsub = config["skip_bkgsub"]
+    except KeyError:
+        skip_bkgsub = False
+
+    try:
         save_fits = config["save_fits"]
     except KeyError:
         save_fits = False
@@ -447,6 +452,7 @@ def _parse_config(config):
         ramp_params,
         skip_bpm,
         dark_file_range,
+        skip_bkgsub
     )
 
 
@@ -503,6 +509,7 @@ def _old_bkg_subtraction(
     do_up_the_ramp=False,
     skip_bpm=False,
     mean_dark=0.0,
+    skip_bkgsub=False
 ):
     list_keys = np.array(list(nod_info.keys()))
     num_entries = len(nod_info.keys())
@@ -546,6 +553,8 @@ def _old_bkg_subtraction(
             bkg_subbed = [
                 im - backgrounds[nod_info[key]["subtract"]]["mean"] for im in ims[key]
             ]
+            if skip_bkgsub:
+                bkg_subbed = [im for im in ims[key]]
             # 2.5.b. multiply the images by the bpm
             bpm_windowed = _extract_window(bpm, nod_info[key]["position"])
             masked_images = apply_bad_pixel_mask(
@@ -656,6 +665,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
         ramp_params,
         skip_bpm,
         dark_file_range,
+        skip_bkgsub
     ) = _parse_config(config)
 
     prefix = f"n_{obsdate}_"
@@ -817,6 +827,7 @@ def do_bkg_subtraction(config: dict, mylogger: Logger) -> bool:
             config=config,
             skip_bpm=skip_bpm,
             mean_dark=mean_dark,
+            skip_bkgsub=skip_bkgsub
         )
 
     logger.info(PROCESS_NAME, "Background subtraction is done!")
