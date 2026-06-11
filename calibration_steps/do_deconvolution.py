@@ -218,7 +218,7 @@ def do_clean(
     k = 0
     im_0 = np.copy(dirty_im)
     im_i = np.copy(im_0)
-    if resulting_im == np.zeros(1):
+    if np.nansum(resulting_im) == 0:
         resulting_im = np.zeros(im_0.shape)
 
     beam = np.copy(psf_estimate)
@@ -502,8 +502,9 @@ def wrap_clean(
     if skip:
         return None, None, None, mygauss
 
-    resulting_im = np.zeros(dirty_im.shape)
     im_to_clean = np.copy(dirty_im)
+    resulting_im = np.zeros(dirty_im.shape)
+
     while True:
         logger.info(PROCESS_NAME, "Starting  CLEAN...")
         resulting_im, residual_im, iterations, _ = do_clean(
@@ -755,7 +756,7 @@ def wrap_clean(
                     tmp = int(float(command.split()[-1]))
                     n_iter = tmp
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                     threshold = -1
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse niter value: {e}")
@@ -772,7 +773,7 @@ def wrap_clean(
                     gain = float(configdata["clean_gain"])  # 1e-3
                     phat = float(configdata["clean_phat"])
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse reset : {e}")
             elif "gain" in command:
@@ -780,7 +781,7 @@ def wrap_clean(
                     tmp = float(command.split()[-1])
                     gain = tmp
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                     threshold = -1
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse gain value: {e}")
@@ -792,7 +793,7 @@ def wrap_clean(
                     gain = float(configdata["clean_gain"])  # 1e-3
                     phat = float(configdata["clean_phat"])
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                 except SyntaxError as e:
                     logger.warn(
                         PROCESS_NAME, f"Could not parse automatic threshold value: {e}"
@@ -802,7 +803,7 @@ def wrap_clean(
                     tmp = float(command.split()[-1])
                     phat = tmp
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse 'phat' value: {e}")
             elif "absolute" in command:
@@ -811,7 +812,7 @@ def wrap_clean(
                     absolute = tmp
                     print(f"Setting 'absolute={tmp}'")
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse 'absolute' value: {e}")
             else:
