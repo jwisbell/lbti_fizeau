@@ -504,6 +504,7 @@ def wrap_clean(
 
     im_to_clean = np.copy(dirty_im)
     resulting_im = np.zeros(dirty_im.shape)
+
     while True:
         logger.info(PROCESS_NAME, "Starting  CLEAN...")
         resulting_im, residual_im, iterations, _ = do_clean(
