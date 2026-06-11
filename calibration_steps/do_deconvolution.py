@@ -502,7 +502,7 @@ def wrap_clean(
     if skip:
         return None, None, None, mygauss
 
-    resulting_im = None
+    resulting_im = np.zeros(dirty_im.shape)
     im_to_clean = np.copy(dirty_im)
     while True:
         logger.info(PROCESS_NAME, "Starting  CLEAN...")
