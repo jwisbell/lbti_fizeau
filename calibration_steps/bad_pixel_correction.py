@@ -48,8 +48,8 @@ def identify_bad_pixels(image, min_sigma=10, niter=1):
             )  # move the psf to the "peak" location
             std = np.nanstd(shifted_kernel * image)
             mean = np.nanmean(shifted_kernel * image)
-            if y == 30 and x == 40:
-                print(std, mean, y, x, image[y, x])
+            # if y == 30 and x == 40:
+            #     print(std, mean, y, x, image[y, x])
             if abs(image[y, x] - mean) >= min_sigma * std:
                 bad_pixel_map[y, x] = 1
                 corrected_image[y, x] = mean
@@ -71,19 +71,17 @@ def bpm_test():
     return 1
 
 
-def correct_image_after_bpm(masked_image, skip=False):
+def correct_image_after_bpm(
+    masked_image, skip=False, find_bad_pixels: bool = False, searchval: float | int = 0
+):
     # find each bad pixel and replace with the median of its neighbors
     # what do we do about the edges? (skip?)
-
-    # zero_locations = []
-    # for i in range(len(masked_image)):
-    #     for j in range(len(masked_image[i])):
-    #         if masked_image[i, j] == 0:
-    #             zero_locations.append((i, j))
     if skip:
         return masked_image
 
-    zero_locations = np.where(masked_image == 0)
+    zero_locations = np.where(masked_image == searchval)
+    if np.isnan(searchval):
+        zero_locations = np.where(np.isnan(masked_image))
 
     corrected_image = np.copy(masked_image)
 
@@ -93,35 +91,31 @@ def correct_image_after_bpm(masked_image, skip=False):
         # p7 | p8 | p9
         loc = (zero_locations[0][i], zero_locations[1][i])
 
-        # vals = []
-        # for x in range(max(0, loc[0] - 1), min(loc[0] + 2, masked_image.shape[0])):
-        #     for y in range(max(0, loc[1] - 1), min(loc[1] + 2, masked_image.shape[1])):
-        #         if x == loc[0] and y == loc[1]:
-        #             continue
-        #
-        #         if masked_image[x, y] == 0:
-        #             continue
-        #
-        #         vals.append(masked_image[x, y])
-
         vals = masked_image[
             max(0, loc[0] - 1) : min(loc[0] + 2, masked_image.shape[0]),
             max(0, loc[1] - 1) : min(loc[1] + 2, masked_image.shape[0]),
         ]
         vals[vals == 0] = np.nan
-        corrected_image[loc[0], loc[1]] = np.nanmedian(vals)
+        if not np.all(np.isnan(vals)):
+            corrected_image[loc[0], loc[1]] = np.nan_to_num(np.nanmedian(vals))
+
+    if find_bad_pixels:
+        # finds any dead or hot pixels not given in map
+        corrected_image, _ = identify_bad_pixels(corrected_image)
+
     return corrected_image
 
 
 def apply_bad_pixel_mask(bpm, bkg_sub_ims, skip=False):
     # actually apply the bad pixel mask
-    # input npm is a binary mask (True means good pixel, False means bad pixel)
+    # input bpm is a binary mask (True means good pixel, False means bad pixel)
     # ensure that all bad pixels are marked as np.nan for easier processing later
     if skip:
         return bkg_sub_ims
 
     masked_ims = [bpm * x for x in bkg_sub_ims]
     masked_ims_test = np.multiply(bpm, bkg_sub_ims)
+
     print(len(masked_ims), masked_ims_test.shape)
     return masked_ims
 

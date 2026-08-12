@@ -14,9 +14,9 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
-from reduction_steps.do_image_corotation import recenter
 from scipy.ndimage import rotate
-from scipy.ndimage import gaussian_filter, median_filter, shift
+from scipy.ndimage import gaussian_filter
+from scipy.signal import correlate2d
 from skimage import restoration
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse
@@ -64,6 +64,28 @@ mpl.rcParams["xtick.direction"] = "in"
 mpl.rcParams["xtick.top"] = True
 mpl.rcParams["ytick.direction"] = "in"
 mpl.rcParams["ytick.right"] = True
+
+
+def cc_recenter(dirty_im, psf_estimate):
+    im = np.copy(dirty_im)
+    psf = np.copy(psf_estimate)
+    im -= np.min(im)
+    im /= np.nanmax(im)
+    psf -= np.min(psf)
+    psf /= np.nanmax(psf)
+
+    # do the cross correlation
+    cross_correlation = correlate2d(
+        im, np.copy(psf), mode="same", boundary="fill", fillvalue=0
+    )
+    max_row, max_col = argmax2d(cross_correlation)
+    shift_x = max_row - im.shape[0] // 2 + 1
+    shift_y = max_col - im.shape[1] // 2 + 1
+
+    # shift the image accordingly
+    new_im = np.roll(psf_estimate, -shift_x, axis=1)
+    new_im = np.roll(new_im, -shift_y, axis=0)
+    return new_im
 
 
 def do_convolution(im, psf):
@@ -291,7 +313,8 @@ def _plot_beamsize(
     )
 
     fitted_gauss, psf_model = fit_gauss(psf_estimate, level=0.25)
-    # psf_model = imshift(psf_model, *find_max_loc(psf_model))
+    psf_model = imshift(psf_model, *find_max_loc(psf_model))
+    # fitted_gauss = imshift(psf_model, *find_max_loc(psf_model))
     print(fitted_gauss, "test")
 
     plt.contour(
@@ -1318,9 +1341,9 @@ def do_deconvolution(
             dirty_im[: dirty_im.shape[0] // 4, : dirty_im.shape[1] // 4]
         )
 
-        dirty_im = imshift(
-            dirty_im, *find_max_loc(dirty_im, do_median=True)
-        )  # recenter
+        # dirty_im = imshift(
+        #     dirty_im, *find_max_loc(dirty_im, do_median=True)
+        # )  # recenter
         if do_bpm:
             dirty_im, _ = bp_corr(dirty_im)
 
@@ -1332,9 +1355,13 @@ def do_deconvolution(
 
         psf_estimate -= np.mean(psf_estimate[:20, :20])
         psf_estimate /= np.max(psf_estimate)
-        psf_estimate = imshift(
-            psf_estimate, *find_max_loc(psf_estimate, do_median=True)
-        )  # recenter
+        # psf_estimate = imshift(
+        #     psf_estimate, *find_max_loc(psf_estimate, do_median=True)
+        # )  # recenter
+
+        # recenter the psf using cc to match the image -- this step shouldn't be necessary!!!
+        # psf_estimate = cc_recenter(dirty_im, psf_estimate)
+
         if do_bpm:
             psf_estimate, _ = bp_corr(psf_estimate)
 

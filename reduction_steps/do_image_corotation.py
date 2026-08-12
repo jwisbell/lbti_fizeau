@@ -19,6 +19,8 @@ from astropy.io import fits
 from astropy.modeling import models, fitting
 
 PROCESS_NAME = "corotate"
+ASTROM_CORRECTION = 0.0  # -1.396  # deg
+METHOD = "gaussian"
 
 
 def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skips=[]):
@@ -31,10 +33,10 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
     rotations = {}
 
     # TODO: delete this
-    lsum = 0
-    lcount = 0
-    msum = 0
-    mcount = 0
+    # lsum = 0
+    # lcount = 0
+    # msum = 0
+    # mcount = 0
 
     for name, _ in nod_info.items():
         if name in skips:  # ['6','7','11']:
@@ -46,12 +48,12 @@ def load_bkg_subtracted_files(nod_info: dict, output_dir: str, target: str, skip
                 f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
             )
             bg_subtracted_frames[name] = bkgsubtracted_ims
-            if "m" in name:
-                msum += np.sum(bkgsubtracted_ims)
-                mcount += len(bkgsubtracted_ims)
-            else:
-                lsum += np.sum(bkgsubtracted_ims)
-                lcount += len(bkgsubtracted_ims)
+            # if "m" in name:
+            #     msum += np.sum(bkgsubtracted_ims)
+            #     mcount += len(bkgsubtracted_ims)
+            # else:
+            #     lsum += np.sum(bkgsubtracted_ims)
+            #     lcount += len(bkgsubtracted_ims)
             cent = np.load(
                 f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
             )
@@ -82,16 +84,17 @@ def _plot_cycles(
     _, axarr = plt.subplots(len(imdict) // 6 + 1, 6)  # figsize=(8.5, 11))
     for ax in axarr.flatten():
         ax.axis("off")
-
+    print("plotting???")
     for k, key in enumerate(imdict.keys()):
+        print(key)
         ims = imdict[key]["ims"]
-        if len(ims < 1):
+        if len(ims) < 1:
             continue
-        try:
-            rotim, _, _ = recenter(np.nanmean(ims, 0))
-        except ValueError:
-            continue
-        # rotim = np.mean(ims, 0)
+        # try:
+        #     rotim, _, _ = recenter(np.nanmean(ims, 0), method=METHOD)
+        # except ValueError:
+        #     continue
+        rotim = np.nanmean(ims, 0)
         ax = axarr.flatten()[k]
 
         ax.imshow(rotim, origin="lower", norm=PowerNorm(0.5))
@@ -177,21 +180,33 @@ def _process_rotations(
                 new_im = np.roll(new_im, -shiftsy[i], axis=0)
 
                 # TODO: make this work better for an object like Io?
-                new_im, _, _ = recenter(new_im, method="median_filter")
+                try:
+                    new_im, _, _ = recenter(new_im, method=METHOD)
+                except Exception as e:
+                    if type(e) is KeyboardInterrupt:
+                        raise
+                    new_im, _, _ = recenter(new_im, method="median_filter")
 
                 # rotate to North
                 pa = rotations[i]
                 # have to remove nans otherwise this returns all nan image
-                rotim = rotate(
-                    np.nan_to_num(new_im), -pa, reshape=False, mode="nearest"
-                )
+                # replace with median of neighbors?
+                # new_im = bad_pixel_correction.correct_image_after_bpm(
+                #     np.nan_to_num(new_im), searchval=0
+                # )
+                new_im = np.nan_to_num(new_im)
+                rotim = rotate(new_im, -pa, reshape=False, mode="nearest")
+                rotim = rotate(rotim, ASTROM_CORRECTION, reshape=False, mode="nearest")
 
                 # EXPERIMENTAL -- keep only the highest resolution part
-                new_im_masked = np.copy(np.nan_to_num(new_im))
+                new_im_masked = np.copy(new_im)
                 middle = new_im_masked.shape[0] // 2
                 new_im_masked[: middle - 1, :] = 0
                 new_im_masked[middle + 1 :, :] = 0
                 rotim_masked = rotate(new_im_masked, -pa, reshape=False, mode="nearest")
+                rotim_masked = rotate(
+                    rotim_masked, ASTROM_CORRECTION, reshape=False, mode="nearest"
+                )
 
                 temp_imarr.append(rotim)
                 temp_rotarr.append(pa)
@@ -236,18 +251,18 @@ def recenter(im, method="median_filter"):
 
         # 2. Initialize the model (guessing amplitude and mean from data)
         # Using COM or Argmax as a starting point makes the fit much more stable
-        y_init, x_init = center_of_mass(im)
+        x_init, y_init = argmax2d(nanmedian_filter(im, 3))
         g_init = models.Gaussian2D(
             amplitude=np.nanmax(im),
             x_mean=x_init,
             y_mean=y_init,
-            x_stddev=1.0,  # update!!!
-            y_stddev=1.0,
+            x_stddev=5.0,  # update!!!
+            y_stddev=5.0,
         )
 
         # 3. Perform the fit
         fit_g = fitting.LevMarLSQFitter()
-        g = fit_g(g_init, x, y, im)
+        g = fit_g(g_init, x, y, im, filter_non_finite=True)
 
         x_obs, y_obs = g.x_mean.value, g.y_mean.value
 
@@ -352,31 +367,53 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     count = 0
     all_rotated = []
     for nod, entry in rotation_dict.items():
-        try:
+        if True:
             # for some reason these need to be recentered again
-            centered_rot, _, _ = recenter(np.sum(entry["ims"], 0))
-            centered_unrot, x, y = recenter(np.sum(entry["centered_unrot"], 0))
+            # TODO: fall back to other method if failed
+            try:
+                centered_rot, _, _ = recenter(np.sum(entry["ims"], 0), method=METHOD)
+                centered_unrot, x, y = recenter(
+                    np.nansum(entry["centered_unrot"], 0), method=METHOD
+                )
+            except Exception as e:
+                if type(e) is KeyboardInterrupt:
+                    raise
+                centered_rot, _, _ = recenter(
+                    np.sum(entry["ims"], 0), method="median_filter"
+                )
+                centered_unrot, x, y = recenter(
+                    np.nansum(entry["centered_unrot"], 0), method="median_filter"
+                )
             # EXPERIMENTAL
-            np.save(
-                f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_nod{nod}_slices.npy",
-                np.array(entry["experimental"]),
-            )
+            # np.save(
+            #     f"{output_dir}/intermediate/{PROCESS_NAME}/{target}_nod{nod}_slices.npy",
+            #     np.array(entry["experimental"]),
+            # )
 
             if remove_bad_pixels:
-                centered_rot, _ = bad_pixel_correction.identify_bad_pixels(centered_rot)
-                centered_unrot, _ = bad_pixel_correction.identify_bad_pixels(
+                # centered_rot, _ = bad_pixel_correction.identify_bad_pixels(centered_rot)
+                # centered_unrot, _ = bad_pixel_correction.identify_bad_pixels(
+                #     centered_unrot
+                # )
+                centered_rot = bad_pixel_correction.correct_image_after_bpm(
+                    centered_rot
+                )
+                centered_unrot = bad_pixel_correction.correct_image_after_bpm(
                     centered_unrot
                 )
 
             sum_rotated += centered_rot
             sum_unrotated += centered_unrot
             sum_std += np.roll(
-                np.roll(np.std(entry["centered_unrot"], 0), x, axis=1), y, axis=0
+                np.roll(np.nanstd(entry["centered_unrot"], 0), x, axis=1), y, axis=0
             )
+            print(len(entry["ims"]))
             count += len(entry["ims"])
             for im in entry["ims"]:
                 all_rotated.append(im)
-        except ValueError:
+        else:  # ValueError as e:
+            print(e)
+            _ = input("wait?? ")
             continue
     mean_rotated = sum_rotated / count
     mean_unrotated = sum_unrotated / count
@@ -395,7 +432,7 @@ def do_image_corotation(config: dict, mylogger: Logger) -> bool:
     # plt.close()
 
     psf_unrotated_percentiles = np.array([mean_unrotated, mean_std])
-    stacked_rotated_im, _, _ = recenter(mean_rotated)
+    stacked_rotated_im, _, _ = recenter(mean_rotated, method=METHOD)
 
     # also plot the individual/combined PSFs
     # stacked_rotated_im = np.mean(properly_rotated_ims, 0)
@@ -576,8 +613,10 @@ def do_image_corotation_sd(config: dict, mylogger: Logger) -> bool:
         if key in skips:
             continue
         # for some reason these need to be recentered again
-        centered_rot, _, _ = recenter(np.nansum(entry["ims"], 0))
-        centered_unrot, x, y = recenter(np.nansum(entry["centered_unrot"], 0))
+        centered_rot, _, _ = recenter(np.nansum(entry["ims"], 0), method=METHOD)
+        centered_unrot, x, y = recenter(
+            np.nansum(entry["centered_unrot"], 0), method=METHOD
+        )
         sum_rotated += centered_rot
         sum_unrotated += centered_unrot
         sum_std += np.roll(

@@ -34,6 +34,7 @@ from calibration_steps.bad_pixel_correction import (
 )
 
 PROCESS_NAME = "bkg_subtraction"
+AUTOMATIC_BADPIXELS = False
 extraction_size = 100
 instrument = "NOMIC"
 logger = None
@@ -434,7 +435,12 @@ def _minimal_load_file(
             )
 
             # correct bad pixels
-            corrected = correct_image_after_bpm(cutout)
+            corrected = correct_image_after_bpm(
+                cutout, find_bad_pixels=AUTOMATIC_BADPIXELS, skip=skip_bpm
+            )
+            # finally, correct any remaining nans?
+            corrected = correct_image_after_bpm(np.nan_to_num(corrected), searchval=0)
+
             if show_plot:
                 fig, axarr = plt.subplots(2, 2)
                 axarr[0, 0].imshow(im, origin="lower", norm=PowerNorm(0.5))
