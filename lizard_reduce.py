@@ -12,7 +12,9 @@ import json
 # pipeline imports
 from utils.utils import create_filestructure
 from utils.util_logger import Logger
-from reduction_steps.do_background_subtraction import do_bkg_subtraction
+from reduction_steps.do_background_subtraction import (
+    new_improved_bkg_subtraction as do_bkg_subtraction,
+)
 from reduction_steps.do_frame_selection import do_frame_selection
 from reduction_steps.do_image_corotation import (
     do_image_corotation,

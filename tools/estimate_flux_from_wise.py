@@ -238,6 +238,8 @@ def main(star_name="Vega", spectral_type: str = "G"):
     results = {}
     result_errs = {}
 
+    # TODO: estimate uncertainty from the 3 MIR values?
+
     # 4. Scale the blackbody so that it matches the WISE flux
     for i, (name, bounds) in enumerate(lbti_filters.items()):
         mid_wav = np.mean(bounds) * u.micron
@@ -298,4 +300,5 @@ def main(star_name="Vega", spectral_type: str = "G"):
 
 
 if __name__ == "__main__":
-    main("HD19305", "M0V")
+    # main("HD19305", "M0V")
+    main("BD+07 301", "M0")

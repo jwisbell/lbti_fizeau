@@ -8,13 +8,15 @@ Produces the final images and plots to diagnose quality.
 Called by lizard_calibrate
 """
 
+from numpy.typing import NDArray
+
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
-from reduction_steps.do_image_corotation import recenter
 from scipy.ndimage import rotate
-from scipy.ndimage import gaussian_filter, median_filter, shift
+from scipy.ndimage import gaussian_filter
+from scipy.signal import correlate2d
 from skimage import restoration
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse
@@ -26,7 +28,14 @@ import torch
 import torch.nn.functional as F
 
 from utils.util_logger import Logger
-from utils.utils import argmax2d, gauss, imshift, find_max_loc, write_to_fits
+from utils.utils import (
+    argmax2d,
+    gauss,
+    imshift,
+    find_max_loc,
+    write_to_fits,
+    create_filestructure,
+)
 from calibration_steps.bad_pixel_correction import identify_bad_pixels as bp_corr
 
 PROCESS_NAME = "deconvolution"
@@ -55,6 +64,28 @@ mpl.rcParams["xtick.direction"] = "in"
 mpl.rcParams["xtick.top"] = True
 mpl.rcParams["ytick.direction"] = "in"
 mpl.rcParams["ytick.right"] = True
+
+
+def cc_recenter(dirty_im, psf_estimate):
+    im = np.copy(dirty_im)
+    psf = np.copy(psf_estimate)
+    im -= np.min(im)
+    im /= np.nanmax(im)
+    psf -= np.min(psf)
+    psf /= np.nanmax(psf)
+
+    # do the cross correlation
+    cross_correlation = correlate2d(
+        im, np.copy(psf), mode="same", boundary="fill", fillvalue=0
+    )
+    max_row, max_col = argmax2d(cross_correlation)
+    shift_x = max_row - im.shape[0] // 2 + 1
+    shift_y = max_col - im.shape[1] // 2 + 1
+
+    # shift the image accordingly
+    new_im = np.roll(psf_estimate, -shift_x, axis=1)
+    new_im = np.roll(new_im, -shift_y, axis=0)
+    return new_im
 
 
 def do_convolution(im, psf):
@@ -124,6 +155,7 @@ def fit_gauss(psf_est, level=0.0):
     data = np.copy(psf_est)
     cut = level * np.max(data)
     data -= cut
+    data = np.nan_to_num(data)
     data[data < 0] = 0
 
     x0 = [5, 5, 0]
@@ -195,20 +227,20 @@ def _do_psf_subtraction(targ_image, psf_image, configdata, targname, calibname):
 
 
 def do_clean(
-    dirty_im,
-    psf_estimate,
-    n_iter,
-    gain=1e-4,
-    threshold=1e-6,
-    negstop=False,
-    phat=0.0,
-    resulting_im=None,
-    absolute=True,
+    dirty_im: NDArray[np.float64],
+    psf_estimate: NDArray[np.float64],
+    n_iter: float,
+    gain: float = 1e-4,
+    threshold: float = 1e-6,
+    negstop: bool = False,
+    phat: float = 0.0,
+    resulting_im: NDArray[np.float64] = np.zeros(1),
+    absolute: bool = True,
 ):
     k = 0
     im_0 = np.copy(dirty_im)
     im_i = np.copy(im_0)
-    if resulting_im is None:
+    if np.nansum(resulting_im) == 0:
         resulting_im = np.zeros(im_0.shape)
 
     beam = np.copy(psf_estimate)
@@ -281,7 +313,8 @@ def _plot_beamsize(
     )
 
     fitted_gauss, psf_model = fit_gauss(psf_estimate, level=0.25)
-    # psf_model = imshift(psf_model, *find_max_loc(psf_model))
+    psf_model = imshift(psf_model, *find_max_loc(psf_model))
+    # fitted_gauss = imshift(psf_model, *find_max_loc(psf_model))
     print(fitted_gauss, "test")
 
     plt.contour(
@@ -492,8 +525,9 @@ def wrap_clean(
     if skip:
         return None, None, None, mygauss
 
-    resulting_im = None
     im_to_clean = np.copy(dirty_im)
+    resulting_im = np.zeros(dirty_im.shape)
+
     while True:
         logger.info(PROCESS_NAME, "Starting  CLEAN...")
         resulting_im, residual_im, iterations, _ = do_clean(
@@ -745,7 +779,7 @@ def wrap_clean(
                     tmp = int(float(command.split()[-1]))
                     n_iter = tmp
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                     threshold = -1
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse niter value: {e}")
@@ -762,7 +796,7 @@ def wrap_clean(
                     gain = float(configdata["clean_gain"])  # 1e-3
                     phat = float(configdata["clean_phat"])
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse reset : {e}")
             elif "gain" in command:
@@ -770,7 +804,7 @@ def wrap_clean(
                     tmp = float(command.split()[-1])
                     gain = tmp
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                     threshold = -1
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse gain value: {e}")
@@ -782,7 +816,7 @@ def wrap_clean(
                     gain = float(configdata["clean_gain"])  # 1e-3
                     phat = float(configdata["clean_phat"])
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                 except SyntaxError as e:
                     logger.warn(
                         PROCESS_NAME, f"Could not parse automatic threshold value: {e}"
@@ -792,7 +826,7 @@ def wrap_clean(
                     tmp = float(command.split()[-1])
                     phat = tmp
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse 'phat' value: {e}")
             elif "absolute" in command:
@@ -801,7 +835,7 @@ def wrap_clean(
                     absolute = tmp
                     print(f"Setting 'absolute={tmp}'")
                     im_to_clean = np.copy(dirty_im)
-                    resulting_im = None
+                    resulting_im = np.zeros(dirty_im.shape)
                 except SyntaxError as e:
                     logger.warn(PROCESS_NAME, f"Could not parse 'absolute' value: {e}")
             else:
@@ -819,8 +853,10 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target, skip=False):
     if skip:
         return None
     try:
-        niter = int(configdata["rl_niter"])
-        eps = float(configdata["rl_eps"])
+        niterval = int(configdata["rl_niter"])
+        epsval = float(configdata["rl_eps"])
+        nitervals = [niterval]
+        epsvals = [epsval]
     except KeyError as e:
         logger.error(
             PROCESS_NAME,
@@ -828,93 +864,128 @@ def wrap_rl(dirty_im, psf_estimate, configdata, target, skip=False):
         )
         return None
 
+    try:
+        do_gridsearch = int(configdata["rl_do_gridsearch"])
+    except KeyError as e:
+        do_gridsearch = False
     gamma = 0.5
 
     normalized_psf = psf_estimate / np.sum(psf_estimate)
 
-    deconvolved_RL = restoration.richardson_lucy(
-        dirty_im, normalized_psf, num_iter=niter, filter_epsilon=eps, clip=False
-    )
+    if do_gridsearch:
+        nitervals = [4, 8, 16, 32, 64, 128, 256] + nitervals
+        epsvals = [1e-1, 5e-2, 1e-2, 5e-3, 1e-3, 5e-4, 1e-4] + epsvals
 
-    xv, yv = np.meshgrid(
-        np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
-    )
+    returned_val = None
+    for niter in nitervals:
+        for eps in epsvals:
+            deconvolved_RL = restoration.richardson_lucy(
+                dirty_im, normalized_psf, num_iter=niter, filter_epsilon=eps, clip=False
+            )
+            if niter == niterval and eps == epsval:
+                returned_val = np.copy(deconvolved_RL)
 
-    # start the plotting
-    fig = plt.figure(figsize=(8.5, 4), layout="constrained")
-    gs = GridSpec(1, 3, figure=fig, width_ratios=[0.495, 0.02, 0.495])
-    ax = fig.add_subplot(gs[0])
-    bx = fig.add_subplot(gs[2])
-    cx = fig.add_subplot(gs[1])
+            xv, yv = np.meshgrid(
+                np.arange(psf_estimate.shape[1]), np.arange(psf_estimate.shape[0])
+            )
 
-    cbar_im = ax.imshow(
-        deconvolved_RL,
-        origin="lower",
-        norm=PowerNorm(gamma, vmin=0, vmax=np.max(deconvolved_RL)),
-        interpolation="gaussian",
-        cmap="Spectral_r",
-    )
+            # start the plotting
+            fig = plt.figure(figsize=(8.5, 4), layout="constrained")
+            gs = GridSpec(1, 3, figure=fig, width_ratios=[0.495, 0.02, 0.495])
+            ax = fig.add_subplot(gs[0])
+            bx = fig.add_subplot(gs[2])
+            cx = fig.add_subplot(gs[1])
 
-    levels = np.array(
-        [0.9 / 512, 0.9 / 256, 0.9 / 32, 0.9 / 16, 0.9 / 8, 0.9 / 4, 0.9 / 2, 0.9]
-    ) * np.max(deconvolved_RL)
-    bx.contour(
-        xv,
-        yv,
-        deconvolved_RL,
-        origin="lower",
-        levels=levels,  # np.array([2,3,4,5,10,20,50])*noise,
-        colors="k",
-        norm=PowerNorm(gamma, vmin=0, vmax=np.max(deconvolved_RL)),
-    )
-    bx.set_aspect("equal")
-    ax.set_aspect("equal")
-    ax.set_xticks(xticks[::-1] - 1)
-    ax.set_xticklabels(xticklabels, fontsize="small")
-    ax.set_yticks(xticks - 4)
-    ax.set_yticklabels(yticklabels, fontsize="small")
-    bx.set_xticks(xticks[::-1] - 1)
-    bx.set_xticklabels(xticklabels, fontsize="small")
-    bx.set_yticks(xticks - 4)
-    bx.set_yticklabels(yticklabels, fontsize="small")
-    bx.grid()
-    ax.text(11, 90, r"N", color="white")
-    ax.text(1, 78, r"E", color="white")
-    ax.plot([14, 14], [80, 88], "white")
-    ax.plot([7, 14], [80, 80], "white")
+            cbar_im = ax.imshow(
+                deconvolved_RL,
+                origin="lower",
+                norm=PowerNorm(gamma, vmin=0, vmax=np.max(deconvolved_RL)),
+                interpolation="gaussian",
+                cmap="Spectral_r",
+            )
 
-    bx.text(11, 90, r"N", color="k")
-    bx.text(1, 78, r"E", color="k")
-    bx.plot([14, 14], [80, 88], "k")
-    bx.plot([7, 14], [80, 80], "k")
+            levels = np.array(
+                [
+                    0.9 / 512,
+                    0.9 / 256,
+                    0.9 / 32,
+                    0.9 / 16,
+                    0.9 / 8,
+                    0.9 / 4,
+                    0.9 / 2,
+                    0.9,
+                ]
+            ) * np.max(deconvolved_RL)
+            bx.contour(
+                xv,
+                yv,
+                deconvolved_RL,
+                origin="lower",
+                levels=levels,  # np.array([2,3,4,5,10,20,50])*noise,
+                colors="k",
+                norm=PowerNorm(gamma, vmin=0, vmax=np.max(deconvolved_RL)),
+            )
+            bx.set_aspect("equal")
+            ax.set_aspect("equal")
+            ax.set_xticks(xticks[::-1] - 1)
+            ax.set_xticklabels(xticklabels, fontsize="small")
+            ax.set_yticks(xticks - 4)
+            ax.set_yticklabels(yticklabels, fontsize="small")
+            bx.set_xticks(xticks[::-1] - 1)
+            bx.set_xticklabels(xticklabels, fontsize="small")
+            bx.set_yticks(xticks - 4)
+            bx.set_yticklabels(yticklabels, fontsize="small")
+            bx.grid()
+            ax.text(11, 90, r"N", color="white")
+            ax.text(1, 78, r"E", color="white")
+            ax.plot([14, 14], [80, 88], "white")
+            ax.plot([7, 14], [80, 80], "white")
 
-    ax.set_xlabel(r"$\Delta\alpha$ [arcseconds]", fontsize="small")
-    ax.set_ylabel(r"$\Delta\delta$ [arcseconds]", fontsize="small")
-    cx.axis("off")
+            bx.text(11, 90, r"N", color="k")
+            bx.text(1, 78, r"E", color="k")
+            bx.plot([14, 14], [80, 88], "k")
+            bx.plot([7, 14], [80, 80], "k")
 
-    flux_label = "Flux density [cts/px]"
-    if is_flux_cal:
-        flux_label = "Flux density [mJy/px]"
-    plt.colorbar(
-        cbar_im,
-        ax=cx,
-        label=flux_label,
-        fraction=1.2,
-        shrink=1,
-        location="right",
-        extend="max",
-    )
-    # plt.suptitle(f'N_iter = {n}, eps={eps}')
-    # plt.savefig(f'../plots/fig3.pdf')#deconv_rl_n{n}_eps1e-2_pa{PA}.png')
-    plt.savefig(
-        f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_rl_deconvolution.png"
-    )
-    plt.close()
+            ax.set_xlabel(r"$\Delta\alpha$ [arcseconds]", fontsize="small")
+            ax.set_ylabel(r"$\Delta\delta$ [arcseconds]", fontsize="small")
+            cx.axis("off")
+
+            flux_label = "Flux density [cts/px]"
+            if is_flux_cal:
+                flux_label = "Flux density [mJy/px]"
+            plt.colorbar(
+                cbar_im,
+                ax=cx,
+                label=flux_label,
+                fraction=1.2,
+                shrink=1,
+                location="right",
+                extend="max",
+            )
+            # plt.suptitle(f'N_iter = {n}, eps={eps}')
+            # plt.savefig(f'../plots/fig3.pdf')#deconv_rl_n{n}_eps1e-2_pa{PA}.png')
+            if do_gridsearch:
+                create_filestructure(
+                    configdata["output_dir"], "rl_grid", prefix="plots/deconvolution"
+                )
+
+                power = np.floor(np.log10(eps))
+                prefactor = eps / np.power(10, power)
+                fmteps = f"{prefactor}e{power}"
+                plt.savefig(
+                    f"{configdata['output_dir']}/plots/{PROCESS_NAME}/rl_grid/{target}_rl_deconvolution_eps{fmteps}_niter{niter}.png"
+                )
+
+            if niterval == niter and epsval == eps:
+                plt.savefig(
+                    f"{configdata['output_dir']}/plots/{PROCESS_NAME}/{target}_rl_deconvolution.png"
+                )
+            plt.close()
 
     # save the results
     # np.save(f"{configdata['output_dir']}/calibrated/{PROCESS_NAME}/{target}_RL_deconvolved_n{niter}_eps{eps_str}.npy", deconvolved_RL)
 
-    return deconvolved_RL
+    return returned_val
 
 
 def clean_test(debug=False):
@@ -1270,9 +1341,9 @@ def do_deconvolution(
             dirty_im[: dirty_im.shape[0] // 4, : dirty_im.shape[1] // 4]
         )
 
-        dirty_im = imshift(
-            dirty_im, *find_max_loc(dirty_im, do_median=True)
-        )  # recenter
+        # dirty_im = imshift(
+        #     dirty_im, *find_max_loc(dirty_im, do_median=True)
+        # )  # recenter
         if do_bpm:
             dirty_im, _ = bp_corr(dirty_im)
 
@@ -1284,9 +1355,13 @@ def do_deconvolution(
 
         psf_estimate -= np.mean(psf_estimate[:20, :20])
         psf_estimate /= np.max(psf_estimate)
-        psf_estimate = imshift(
-            psf_estimate, *find_max_loc(psf_estimate, do_median=True)
-        )  # recenter
+        # psf_estimate = imshift(
+        #     psf_estimate, *find_max_loc(psf_estimate, do_median=True)
+        # )  # recenter
+
+        # recenter the psf using cc to match the image -- this step shouldn't be necessary!!!
+        # psf_estimate = cc_recenter(dirty_im, psf_estimate)
+
         if do_bpm:
             psf_estimate, _ = bp_corr(psf_estimate)
 

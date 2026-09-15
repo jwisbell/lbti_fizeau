@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 
 from utils.util_logger import Logger
+from utils.utils import write_to_fits
 
 
 PROCESS_NAME = "flux_calibration"
@@ -22,6 +23,7 @@ logger = Logger("./")
 def _load_images_and_compute_stats(path_dict: dict, skips: list):
     all_kept_sums = []
     all_kept_peaks = []
+    all_kept_ims = []
     for key, path in path_dict.items():
         print(key, path)
         if key in skips:
@@ -37,12 +39,13 @@ def _load_images_and_compute_stats(path_dict: dict, skips: list):
 
             kept_ims = cims[mask]
 
-            kept_ims = np.array([x - np.mean(x[:5, :5]) for x in kept_ims])
-            kept_ims = np.array([x - np.min(x) for x in kept_ims])
+            kept_ims = np.array([x - np.nanmean(x[:5, :5]) for x in kept_ims])
+            kept_ims = np.array([x - np.nanmin(x) for x in kept_ims])
 
             for ki in kept_ims:
-                all_kept_sums.append(np.sum(ki))
-                all_kept_peaks.append(np.max(ki))
+                all_kept_sums.append(np.nansum(ki))
+                all_kept_peaks.append(np.nanmax(ki))
+            all_kept_ims.append(np.nanmean(kept_ims, 0))
             # for fi in full_ims:
             #     all_images.append(fi)
 
@@ -60,13 +63,14 @@ def _load_images_and_compute_stats(path_dict: dict, skips: list):
 
     logger.info(
         PROCESS_NAME,
-        f"Relative errs: {np.std(all_kept_sums)/np.mean(all_kept_sums)} vs {np.std(all_kept_peaks)/np.mean(all_kept_peaks)}",
+        f"Relative errs: {np.nanstd(all_kept_sums) / np.nanmean(all_kept_sums)} vs {np.nanstd(all_kept_peaks) / np.nanmean(all_kept_peaks)}",
     )
 
     return {
-        "mean": np.mean(all_kept_sums),
-        "percentiles": np.percentile(all_kept_sums, [50 - 34, 50, 50 + 34]),
-        "std": np.std(all_kept_sums),
+        "mean": np.nanmean(all_kept_sums),
+        "percentiles": np.nanpercentile(all_kept_sums, [50 - 34, 50, 50 + 34]),
+        "std": np.nanstd(all_kept_sums),
+        "mean_im": np.nanmean(all_kept_ims, 0),
     }
 
 
@@ -207,5 +211,19 @@ def do_flux_calibration(
         flux_range,
     )
     logger.info(PROCESS_NAME, f"Saved flux percentiles to {outname}")
+
+    target_im = target_stats["mean_im"]
+    calib_im = target_stats["mean_im"]
+    fluxcal_im = target_im / calib_im * calib_flux
+
+    write_to_fits(
+        fluxcal_im,
+        f"{output_dir}/calibrated/flux_calibration/sci_{target_name}_with_cal_{calib_name}_flux_calibrated_im.fits",
+    )
+
+    # write_to_fits(
+    #     calib_stats["mean_im"] / np.nansum("mean_im") * calib_flux,
+    #     f"{output_dir}/calibrated/flux_calibration/cal_{calib_name}_flux_calibrated_im.fits",
+    # )
 
     return True

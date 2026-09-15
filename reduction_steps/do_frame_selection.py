@@ -24,7 +24,7 @@ logger: Logger = Logger("./")
 
 
 # Function Definitions
-def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
+def _frame_selection_scores_cc(images, true_psf, keep_fraction=0.1, debug=False):
     """
     Function to select frames based on their cross correlation to the reference psf. A fraction `keep_fraction` is used to make up a final, stacked image.
     """
@@ -35,10 +35,11 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
     snr = []
     for temp_im in images:
         im = np.copy(temp_im)
+        psf = np.copy(true_psf)
 
         # renormalize the images
         s = np.nansum(im)
-        im -= np.min(im)
+        im -= np.nanmin(im)
         im /= np.nanmax(im)
         psf -= np.min(psf)
         psf /= np.nanmax(psf)
@@ -55,23 +56,23 @@ def _frame_selection_scores_cc(images, psf, keep_fraction=0.1, debug=False):
         new_im = np.roll(temp_im, -shift_x, axis=1)
         new_im = np.roll(new_im, -shift_y, axis=0)
 
-        snr.append(np.percentile(new_im, 95) / np.std(new_im[:10, :10]))
+        snr.append(np.nanpercentile(new_im, 95) / np.nanstd(new_im[:10, :10]))
 
         corrected_ims.append(new_im)
         shiftsx.append(shift_x)
         shiftsy.append(shift_y)
 
         test_im = np.copy(new_im)
-        test_im -= np.mean(test_im)
-        test_im /= np.max(test_im)
+        test_im -= np.nanmean(test_im)
+        test_im /= np.nanmax(test_im)
 
         correlation_vals.append(
-            np.sum(np.square(test_im - psf)) / np.square(len(new_im))
+            np.nansum(np.square(test_im - psf)) / np.square(len(new_im))
         )  #
 
         if debug:
             _, (ax, bx) = plt.subplots(1, 2)
-            t = new_im / np.sum(new_im)
+            t = new_im / np.nansum(new_im)
             t -= np.mean(t)
             t /= np.max(t)
             ax.plot(t[14, :], label="shifted im")
@@ -488,6 +489,10 @@ def _frame_centering_and_selection(
             # add the phase column
             phase_values = phase_info["central"]
             polars_df = polars_df.with_columns(pl.Series("central_phase", phase_values))
+
+            polars_df = polars_df.with_columns(pl.Series("tip", phase_info["ud"]))
+            polars_df = polars_df.with_columns(pl.Series("tilt", phase_info["lr"]))
+
             polars_df = polars_df.with_columns(
                 pl.Series("correlation_vals", correlation_vals)
             )
@@ -699,18 +704,21 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
         if "bkg" in name or "off" in name:
             continue
         # TODO: read almost all of this from the dataframes
-        cent = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
-        )
-        bkgsubtracted_ims = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
-        )
-        rotations[name] = np.load(
-            f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
-        )
+        try:
+            cent = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_centroid-positions_cycle{name}.npy"
+            )
+            bkgsubtracted_ims = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_bkg-subtracted_cycle{name}.npy"
+            )
+            rotations[name] = np.load(
+                f"{output_dir}/intermediate/bkg_subtraction/{target}_rotations_cycle{name}.npy"
+            )
 
-        bg_subtracted_frames[name] = bkgsubtracted_ims
-        centroid_positions[name] = cent
+            bg_subtracted_frames[name] = bkgsubtracted_ims
+            centroid_positions[name] = cent
+        except FileNotFoundError:
+            continue
 
     # do all frames for actual processing
     for key in bg_subtracted_frames:
@@ -718,6 +726,13 @@ def do_frame_selection(config: dict, mylogger: Logger) -> bool:
         mypsf = _mk_model_psf(mode=mode)
         if psfname != "model":
             mypsf = empirical_psf
+
+        # handle when a nod is "skipped" because of missing files or improperly formatted config file
+        try:
+            _ = bg_subtracted_frames[key]
+        except KeyError:
+            continue
+
         _frame_centering_and_selection(
             key,
             bg_subtracted_frames,
