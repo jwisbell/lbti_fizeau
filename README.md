@@ -27,7 +27,7 @@ Note that Fizeau lucky image includes large amounts of data. 10s or 100s of thou
 
 ## Raw Data Format
 
-Raw data (in the form of _.fits) files can be either uncompressed or compressed (e.g., _.fits.gz). The latter takes up less space on your hard-drive but takes significantly longer to process because it must be uncompressed in the background. **If you plan on repeatedly reducing data (for, e.g., testing purposes), I suggest uncompressing the fits files first!**
+Raw data (in the form of _.fits) files can be either uncompressed or compressed (e.g.,_.fits.gz). The latter takes up less space on your hard-drive but takes significantly longer to process because it must be uncompressed in the background. **If you plan on repeatedly reducing data (for, e.g., testing purposes), I suggest uncompressing the fits files first!**
 
 ## Usage
 
@@ -62,29 +62,37 @@ See `template_target_config.json` for an example. The fields to edit are
 - `psfname`: takes either "model" | "/path/to/reduced/unrotated_psf.npy", which is an intermediate product of the psf calibrator. Suggested to use "model" for calibrators and then the empirical psf for science targets
 - `cutoff_fraction`: percentile of lucky fringing frames to keep (default 0.5, but values from 0.1 to 0.9 are valid; see [Isbell et al. 2024a](https://www.spiedigitallibrary.org/conference-proceedings-of-spie/13095/1309506/The-LBTI-pioneering-the-ELT-era/10.1117/12.3027270.short?tab=ArticleLinkCited)
 - `batch_size`: raw images are processed in batches to reduce memory overhead (default 10 nods)
+- `positions`: a dictionary of named cutout positions of format
+
+```
+  "positions": { "pos1": [621, 100], "pos2": [1360, 100] },
+```
+
 - `nod_info`: a dictionary of format
+
   ```
   "1": {
       "start": 12000,
       "end": 13999,
-      "position": [65, 65],
+      "position": "pos1",
       "subtract": "2"
     },
   "2": {
       "start": 14000,
       "end": 15999,
-      "position": [65, 190],
+      "position": "pos2",
       "subtract": "1"
     },
   ...,
    "n": {
       "start": 16000,
       "end": 17999,
-      "position": [65, 65],
+      "position": "pos1",
       "subtract": "n-1"
     },
   ```
-  where the starting and ending file number for each nodding cycle is specified, along with a rough location of the target within the frame. Finally the `subtract` key specifies which nod to use for background subtraction (usually observations are done in A-B pairs)
+
+  where the starting and ending file number for each nodding cycle is specified, along with a rough location of the target within the frame, specified with the named position from above. Alternatively, "position" takes an array of x,y coordinates, e.g., `"position":[521,100]`. Finally the `subtract` key specifies which nod to use for background subtraction (usually observations are done in A-B pairs)
 
 ### 1. Run the `lizard_reduce.py` script on each target and calibrator
 
@@ -116,7 +124,6 @@ This process does the following
 
 1. Calculates the final PSF of the stacked+corotated science observations
 2. Does flux calibration
-3. Does PSF deconvolution using the Hogbom CLEAN algorithm and with Richardson-Lucy deconvolution
 
 For each target-calibrator pair a new config file must be specified. See `template_calibration_config.json` for an example. The fields to edit are
 
@@ -125,14 +132,30 @@ For each target-calibrator pair a new config file must be specified. See `templa
 - `output_dir`: the path in which to save data products, plots and logs
 - `obs_wavelength`: the wavelength of the observation
 - `flux_cal`: a dictionary of format
+
   ```
   {"calib_flux_Jy":"valueInJy", "calib_flux_err_Jy":"valueInJy"}
   ```
+
 - `clean_niter`: the number of iterations to run the `CLEAN` deconvolution (default 1e5)
 - `clean_gain`: the gain to be used in the `CLEAN` deconvolution (default 1e-3)
 - `clean_phat`: the pointy-hat parameter to be used during `CLEAN` deconvolution (default:0.0, useful for extended emission)
 - `rl_niter`: the number if iterations to be used during Richardson-Lucy deconvolution (default:32)
 - `rl_eps`: the filter epsilon to be used during Richardson-Lucy deconvolution (default: 1e-3)
+
+The latter keywords are important for deconvolution only.
+
+### 3. Run the deconvolution tools
+
+```
+lizard.py deconvolve /path/to/calibration_config.json
+```
+
+This does PSF deconvolution using the
+
+1. Hogbom CLEAN algorithm
+2. Richardson-Lucy deconvolution
+3. An Adam-based pixel fit
 
 ## Products
 

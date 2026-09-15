@@ -489,6 +489,10 @@ def _frame_centering_and_selection(
             # add the phase column
             phase_values = phase_info["central"]
             polars_df = polars_df.with_columns(pl.Series("central_phase", phase_values))
+
+            polars_df = polars_df.with_columns(pl.Series("tip", phase_info["ud"]))
+            polars_df = polars_df.with_columns(pl.Series("tilt", phase_info["lr"]))
+
             polars_df = polars_df.with_columns(
                 pl.Series("correlation_vals", correlation_vals)
             )
