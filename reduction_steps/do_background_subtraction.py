@@ -472,10 +472,16 @@ def _load_science_files(
     nod_info = config["nod_info"]
 
     logger.info(PROCESS_NAME, f"Loading nod {key}")
-    filenames = [
-        f"{fdir}{prefix}{str(i).zfill(6)}.fits"
-        for i in range(nod_info[key]["start"], nod_info[key]["end"] + 1)
-    ]
+    try:
+        print("Using filenums")
+        file_numbers = nod_info[key]["filenums"]
+        filenames = [f"{fdir}{prefix}{str(i).zfill(6)}.fits" for i in file_numbers]
+    except KeyError:
+        print("Using start and end")
+        filenames = [
+            f"{fdir}{prefix}{str(i).zfill(6)}.fits"
+            for i in range(nod_info[key]["start"], nod_info[key]["end"] + 1)
+        ]
     logger.info(PROCESS_NAME, f"\t {len(filenames)} files")
 
     # Check if we are dealing with fits or fits.gz
@@ -487,10 +493,16 @@ def _load_science_files(
             PROCESS_NAME,
             "\t Using compressed target files (*fits.gz) -- NOTE: this takes longer to process",
         )
-        filenames = [
-            f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz"
-            for i in range(nod_info[key]["start"], nod_info[key]["end"] + 1)
-        ]
+        try:
+            file_numbers = nod_info[key]["filenums"]
+            filenames = [
+                f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz" for i in file_numbers
+            ]
+        except KeyError:
+            filenames = [
+                f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz"
+                for i in range(nod_info[key]["start"], nod_info[key]["end"] + 1)
+            ]
 
     size = config["sub_window"]
     pos = nod_info[key]["position"]
@@ -527,10 +539,17 @@ def _load_background_files(
     nod_info = config["nod_info"]
 
     logger.info(PROCESS_NAME, f"Loading nod {key} (as background)")
-    filenames = [
-        f"{fdir}{prefix}{str(i).zfill(6)}.fits"
-        for i in range(nod_info[key]["start"], nod_info[key]["end"] + 1)
-    ]
+    try:
+        print("Using filenums")
+        file_numbers = nod_info[key]["filenums"]
+        filenames = [f"{fdir}{prefix}{str(i).zfill(6)}.fits" for i in file_numbers]
+    except KeyError:
+        print("Using start and end")
+        filenames = [
+            f"{fdir}{prefix}{str(i).zfill(6)}.fits"
+            for i in range(nod_info[key]["start"], nod_info[key]["end"] + 1)
+        ]
+
     logger.info(PROCESS_NAME, f"\t {len(filenames)} files")
 
     # Check if we are dealing with fits or fits.gz
@@ -542,10 +561,16 @@ def _load_background_files(
             PROCESS_NAME,
             "\t Using compressed target files (*fits.gz) -- NOTE: this takes longer to process",
         )
-        filenames = [
-            f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz"
-            for i in range(nod_info[key]["start"], nod_info[key]["end"] + 1)
-        ]
+        try:
+            file_numbers = nod_info[key]["filenums"]
+            filenames = [
+                f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz" for i in file_numbers
+            ]
+        except KeyError:
+            filenames = [
+                f"{fdir}{prefix}{str(i).zfill(6)}.fits.gz"
+                for i in range(nod_info[key]["start"], nod_info[key]["end"] + 1)
+            ]
 
     with Pool() as pool:
         res = pool.starmap(
